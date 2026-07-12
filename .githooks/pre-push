@@ -1,0 +1,13 @@
+#!/bin/sh
+# Keeps `main` green: nothing reaches GitHub without lint and tests passing.
+# Enabled with: git config core.hooksPath .githooks
+set -e
+
+echo "pre-push: ruff"
+uv run ruff check .
+uv run ruff format --check .
+
+echo "pre-push: pytest"
+uv run pytest
+
+echo "pre-push: ok"
