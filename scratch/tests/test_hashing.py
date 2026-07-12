@@ -4,9 +4,9 @@ import pytest
 
 from core.hashing import (
     HashCache,
+    content_hash,
     hash_directory,
     hash_entry,
-    hash_entry_if_exists,
     hash_file,
 )
 
@@ -152,15 +152,44 @@ def test_an_empty_directory_has_a_stable_hash(tmp_path):
     assert hash_directory(a) == hash_directory(b)
 
 
-def test_an_absent_path_hashes_to_none(tmp_path):
+def test_an_absent_path_has_no_content_hash(tmp_path):
     """Absence is a real state - a bound Entry whose Live Save does not exist yet - not an
     error to be raised at the state machine."""
-    assert hash_entry_if_exists(tmp_path / "not-here") is None
+    assert content_hash(tmp_path / "not-here") is None
 
 
-def test_a_present_path_hashes_to_a_digest(tmp_path):
+def test_a_present_path_has_a_content_hash(tmp_path):
     tree = make_tree(tmp_path / "a", {"slot1.sav": "data"})
-    assert hash_entry_if_exists(tree) == hash_entry(tree)
+    assert content_hash(tree) == hash_entry(tree)
+
+
+def test_a_directory_with_no_files_has_no_content_hash(tmp_path):
+    """An empty directory and an absent one are the same thing to Git, so they must be the
+    same thing here. An Entry whose content directory is empty is simply not there after a
+    clone; if the two hashed differently, that Entry could never be In Sync with its own
+    faithful - and necessarily absent - copy in the Vault.
+
+    Safety, not just correctness: `entry_state` refuses to Sync a `None` Live Save into the
+    Vault, so the uninstalled game that leaves its empty save folder behind cannot erase the
+    Entry's content there."""
+    empty = tmp_path / "uninstalled"
+    empty.mkdir()
+
+    assert content_hash(empty) is None
+
+
+def test_a_directory_holding_only_empty_directories_has_no_content_hash(tmp_path):
+    """Still no files, so still nothing Git can carry."""
+    root = tmp_path / "entry"
+    (root / "screenshots" / "thumbs").mkdir(parents=True)
+
+    assert content_hash(root) is None
+
+
+def test_a_directory_with_even_one_file_has_a_content_hash(tmp_path):
+    tree = make_tree(tmp_path / "a", {"deep/slot1.sav": ""})  # an empty *file* is content
+
+    assert content_hash(tree) is not None
 
 
 # --- the cache -------------------------------------------------------------------------

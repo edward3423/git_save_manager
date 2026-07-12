@@ -105,17 +105,12 @@ def _walk_files(root: Path) -> list[tuple[str, Path]]:
     return sorted(found, key=lambda pair: pair[0])
 
 
-def hash_directory(path: Path, cache: HashCache | None = None) -> str:
-    """Composite hash over every file's relative path and content.
-
-    Paths are part of the digest, so moving a save between slots registers as a change.
-    Empty directories are not: see the module docstring.
-    """
+def _hash_files(files: list[tuple[str, Path]], cache: HashCache | None) -> str:
     digest = hashlib.sha256()
     digest.update(SCHEME)
     digest.update(b"dir")
 
-    for relative, absolute in _walk_files(path):
+    for relative, absolute in files:
         encoded = relative.encode("utf-8")
         # Length-prefixed so that no rearrangement of names and contents can collide with a
         # different tree that happens to concatenate to the same bytes.
@@ -124,6 +119,15 @@ def hash_directory(path: Path, cache: HashCache | None = None) -> str:
         digest.update(bytes.fromhex(hash_file(absolute, cache)))
 
     return digest.hexdigest()
+
+
+def hash_directory(path: Path, cache: HashCache | None = None) -> str:
+    """Composite hash over every file's relative path and content.
+
+    Paths are part of the digest, so moving a save between slots registers as a change.
+    Empty directories are not: see the module docstring.
+    """
+    return _hash_files(_walk_files(path), cache)
 
 
 def hash_entry(path: Path, cache: HashCache | None = None) -> str:
@@ -141,12 +145,36 @@ def hash_entry(path: Path, cache: HashCache | None = None) -> str:
     return digest.hexdigest()
 
 
-def hash_entry_if_exists(path: Path, cache: HashCache | None = None) -> str | None:
-    """The Entry's hash, or None if the path does not exist.
+def content_hash(path: Path, cache: HashCache | None = None) -> str | None:
+    """The Entry's content hash, or `None` if it holds no content the Vault can represent.
 
-    Absence is a real state, not an error: a bound Entry whose Live Save has not been
-    created yet, or an Entry removed from the Vault by another Machine.
+    This is the function the state machine uses, and `None` is a first-class answer, not an
+    error: a bound Entry whose Live Save has not been created yet, or an Entry another
+    Machine removed from the Vault.
+
+    `None` deliberately covers *two* situations, because the Vault cannot tell them apart:
+
+    1. The path does not exist.
+    2. The path is a directory containing no files (however many empty subdirectories).
+
+    Git stores no empty directories, so an Entry whose content directory is empty is simply
+    *not there* after a clone. Were these to hash differently, an Entry with no saves in it
+    could never be In Sync with its own faithful - and necessarily absent - copy in the
+    Vault. They are the same content: none. This is the same rule as the module docstring's,
+    applied at the top: the hash may only describe what the Vault can represent.
+
+    The distinction is load-bearing for *safety*, not merely for correctness. `entry_state`
+    refuses to Sync a contentless Live Save into the Vault, since that would erase the
+    Entry's content there. An uninstalled game that leaves an empty save folder behind must
+    not be able to trigger that, and it is empty rather than absent.
     """
-    if not path.exists() and not path.is_symlink():
+    if path.is_symlink():
+        return hash_entry(path, cache)  # a symlink is content, and is never followed
+    if not path.exists():
         return None
+    if path.is_dir():
+        files = _walk_files(path)
+        if not files:
+            return None
+        return _hash_files(files, cache)
     return hash_entry(path, cache)

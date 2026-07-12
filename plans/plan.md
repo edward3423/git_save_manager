@@ -72,19 +72,41 @@ The app must live somewhere writable. **Check at startup and refuse to run other
 
 The heart of the application ([ADR-0001](../docs/adr/0001-baseline-ledger-three-way-state.md)). An Entry's state is derived, never remembered.
 
+A side has **no content** when its path does not exist *or* when it is a directory holding no files - Git stores no empty directories, so the Vault cannot tell those apart, and neither may we ([ADR-0006](../docs/adr/0006-absence-never-propagates.md)).
+
 ```
+if Live has no content and Vault has no content:
+    state = No Content                      # not In Sync: nothing to be in sync about
+
 if hash(Live) == hash(Vault):
     state = In Sync;  repair Baseline to that hash   # self-healing short-circuit
-else:
+
+if Vault has no content:                    # so the Live Save does have some
+    Baseline is None -> Local Ahead         # never Synced; the Vault simply has nothing yet
+    otherwise       -> Removed from Vault   # another Machine removed it
+
+if Live has no content:                     # so the Vault does have some
+    Baseline is None -> Vault Ahead         # the ordinary second-machine bind
+    otherwise       -> Live Save Missing    # unplugged drive, or uninstalled game
+
+else:                                       # both sides have content, and they differ
     Live vs Baseline    Vault vs Baseline    State
     ----------------    -----------------    -----
-    same                same                 In Sync
     CHANGED             same                 Local Ahead    -> offer Sync to Vault
     same                CHANGED              Vault Ahead    -> offer Restore to Live
     CHANGED             CHANGED              Conflict       -> ask the human
 ```
 
 The equality short-circuit runs **first**. It heals a stale Baseline left by a crash between "files written" and "Baseline updated" (which would otherwise surface as a false Conflict), and it means binding an Entry whose live path already matches the Vault requires no prompt at all.
+
+**Absence never propagates.** Where a Baseline exists, an absent side means something was *destroyed or disconnected*, and is never evidence to change the other side. Fed to the three-way table alone, an unplugged drive reads as Local Ahead and offers to Sync the absence - erasing the Entry's content in the Vault - and an Entry another Machine removed reads as Vault Ahead and offers to Restore, deleting the Live Save. So two rules are enforced last, for every state, without exception:
+
+> **Sync to Vault** is never offered when the Live Save has no content.
+> **Restore to Live** is never offered when the Vault has no content.
+
+Neither *Live Save Missing* nor *Removed from Vault* recommends a default: an unplugged drive and a deliberate deletion are indistinguishable from inside the app. Both offer **Unbind** alongside, and neither is ever cleaned up silently.
+
+Only the *equality pattern* of (Live, Vault, Baseline) matters, so the state space is exactly 3x3x3 = 27 cases. `scratch/tests/test_entry_state.py` enumerates every one of them and asserts the two rules across the whole space at once.
 
 **Two distinct conflicts**, resolved the same way but triggered differently:
 
@@ -200,8 +222,8 @@ Considered and deliberately rejected. Recorded so they are not re-litigated.
 |---|---|---|
 | `chore/scaffold` - tooling, package layout, `data/` paths | merged (#1) | autonomous |
 | `core/logger-config` - logger, config, Machine ID, keyring PAT | merged (#2) | autonomous |
-| `core/hashing` - file and directory content hashes, cache | open (#3) | autonomous |
-| `core/ledger-state` - Ledger, Bindings, Baselines, the four-state machine | | **human reads the diff** |
+| `core/hashing` - file and directory content hashes, cache | merged (#3) | autonomous |
+| `core/ledger-state` - Ledger, Bindings, Baselines, the state machine | open (#4) | **human reads the diff** |
 | `core/transaction` - journaled Live writes, backups, startup recovery | | **human reads the diff** |
 | `core/vault-git` - clone/sparse, Sync-as-one-commit, stable-read guard, history | | **human reads the diff** |
 | `core/github-bootstrap` - four bootstrap paths, `vault.json` marker, PAT hygiene | | autonomous |
