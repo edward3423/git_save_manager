@@ -1,7 +1,33 @@
 [project]
 name = "git-save-manager"
 version = "0.1.0"
-description = "Add your description here"
+description = "Git-backed manager for game saves and application settings"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "PyQt6>=6.7",
+    "keyring>=25",
+]
+
+# Git is driven through subprocesses rather than a library binding: the PAT must be
+# injected per-invocation via a one-shot credential helper and the subprocess environment
+# (see plans/plan.md, Phase 3), which needs direct control over argv and env.
+# GitHub REST calls use urllib from the standard library.
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["scratch/tests"]
+pythonpath = ["."]
+addopts = "-q"
