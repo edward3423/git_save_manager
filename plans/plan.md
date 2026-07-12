@@ -186,10 +186,34 @@ Considered and deliberately rejected. Recorded so they are not re-litigated.
 - **Filesystem watchers.** OS-specific, and they fire constantly on directories games are actively writing. Focus-based refresh plus pre-operation re-validation covers the real cases.
 - **Automatic pull, push, or retry.** Every Cloud operation and every retry after an aborted Sync is an explicit human act.
 - **Deleting Live Saves.** Never, under any operation (Invariant 1).
+- **Preserving empty directories and file modes.** The content hash may only describe what the Vault can actually carry. Git stores neither an empty directory nor a reliable permission bit across platforms, so if the hash counted them, a Live Save holding an empty folder would hash differently from its own faithful copy in the Vault - **forever**. The Entry would sit at Local Ahead for all time, every Sync would appear to do nothing, and **In Sync would be unreachable**. Both are therefore excluded from the hash, and the cost is accepted: an empty directory does not survive a round trip through the Vault. (Should a game ever need one, the fix is to record it in the metadata sidecar - never as a `.gitkeep` inside the content directory, which Invariant 5 forbids.)
 
 ---
 
-## 7. Verification
+## 7. Development Workflow
+
+`main` is always green. Work happens on a branch, arrives via a pull request, and is squash-merged once `ruff` and `pytest` pass. Both gates run automatically: a pre-push hook (`git config core.hooksPath .githooks`) and GitHub Actions on every PR.
+
+**One branch per slice, not per phase.** A slice is something that stands alone and can be tested in isolation. Phase 2 as a single branch would be several hundred lines covering the most dangerous code in the app, reviewed in one sitting - which is exactly where a mistake hides.
+
+| Slice | Status | Review |
+|---|---|---|
+| `chore/scaffold` - tooling, package layout, `data/` paths | merged (#1) | autonomous |
+| `core/logger-config` - logger, config, Machine ID, keyring PAT | merged (#2) | autonomous |
+| `core/hashing` - file and directory content hashes, cache | open (#3) | autonomous |
+| `core/ledger-state` - Ledger, Bindings, Baselines, the four-state machine | | **human reads the diff** |
+| `core/transaction` - journaled Live writes, backups, startup recovery | | **human reads the diff** |
+| `core/vault-git` - clone/sparse, Sync-as-one-commit, stable-read guard, history | | **human reads the diff** |
+| `core/github-bootstrap` - four bootstrap paths, `vault.json` marker, PAT hygiene | | autonomous |
+| `ui/*` - main window, dialogs, offline mode, Redo Initialization | | autonomous |
+
+**Three slices stop at the pull request rather than merging on green.** They are the ones that can lose save data, and they share a failure mode no amount of automation catches: the same author writes the code, writes the tests, and judges whether they pass. Tests written from the same wrong mental model as the code agree with it enthusiastically. A wrong-but-green `ledger-state` looks perfect right up until the day it overwrites a Machine's progress with a stale save and reports success.
+
+For those three, the thing to read is **the tests, not the implementation**. If they encode the scenarios from Section 8 - a Pull that must not move the Baseline; a stale Live plus a pulled Vault that must report **Vault Ahead** and not In Sync; a kill mid-restore that must leave the Live Save fully old or fully new - then the code is being held to the spec rather than to itself. If they don't, the green tick is decoration.
+
+---
+
+## 8. Verification
 
 ### Automated (`scratch/tests/`) - headless: real Git in temp dirs, a second Machine simulated by cloning. No network, no GitHub, no PyQt, no games.
 
