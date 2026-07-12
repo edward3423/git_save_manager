@@ -186,6 +186,7 @@ Considered and deliberately rejected. Recorded so they are not re-litigated.
 - **Filesystem watchers.** OS-specific, and they fire constantly on directories games are actively writing. Focus-based refresh plus pre-operation re-validation covers the real cases.
 - **Automatic pull, push, or retry.** Every Cloud operation and every retry after an aborted Sync is an explicit human act.
 - **Deleting Live Saves.** Never, under any operation (Invariant 1).
+- **Preserving empty directories and file modes.** The content hash may only describe what the Vault can actually carry. Git stores neither an empty directory nor a reliable permission bit across platforms, so if the hash counted them, a Live Save holding an empty folder would hash differently from its own faithful copy in the Vault - **forever**. The Entry would sit at Local Ahead for all time, every Sync would appear to do nothing, and **In Sync would be unreachable**. Both are therefore excluded from the hash, and the cost is accepted: an empty directory does not survive a round trip through the Vault. (Should a game ever need one, the fix is to record it in the metadata sidecar - never as a `.gitkeep` inside the content directory, which Invariant 5 forbids.)
 
 ---
 
