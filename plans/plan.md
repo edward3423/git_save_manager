@@ -190,7 +190,30 @@ Considered and deliberately rejected. Recorded so they are not re-litigated.
 
 ---
 
-## 7. Verification
+## 7. Development Workflow
+
+`main` is always green. Work happens on a branch, arrives via a pull request, and is squash-merged once `ruff` and `pytest` pass. Both gates run automatically: a pre-push hook (`git config core.hooksPath .githooks`) and GitHub Actions on every PR.
+
+**One branch per slice, not per phase.** A slice is something that stands alone and can be tested in isolation. Phase 2 as a single branch would be several hundred lines covering the most dangerous code in the app, reviewed in one sitting - which is exactly where a mistake hides.
+
+| Slice | Status | Review |
+|---|---|---|
+| `chore/scaffold` - tooling, package layout, `data/` paths | merged (#1) | autonomous |
+| `core/logger-config` - logger, config, Machine ID, keyring PAT | merged (#2) | autonomous |
+| `core/hashing` - file and directory content hashes, cache | open (#3) | autonomous |
+| `core/ledger-state` - Ledger, Bindings, Baselines, the four-state machine | | **human reads the diff** |
+| `core/transaction` - journaled Live writes, backups, startup recovery | | **human reads the diff** |
+| `core/vault-git` - clone/sparse, Sync-as-one-commit, stable-read guard, history | | **human reads the diff** |
+| `core/github-bootstrap` - four bootstrap paths, `vault.json` marker, PAT hygiene | | autonomous |
+| `ui/*` - main window, dialogs, offline mode, Redo Initialization | | autonomous |
+
+**Three slices stop at the pull request rather than merging on green.** They are the ones that can lose save data, and they share a failure mode no amount of automation catches: the same author writes the code, writes the tests, and judges whether they pass. Tests written from the same wrong mental model as the code agree with it enthusiastically. A wrong-but-green `ledger-state` looks perfect right up until the day it overwrites a Machine's progress with a stale save and reports success.
+
+For those three, the thing to read is **the tests, not the implementation**. If they encode the scenarios from Section 8 - a Pull that must not move the Baseline; a stale Live plus a pulled Vault that must report **Vault Ahead** and not In Sync; a kill mid-restore that must leave the Live Save fully old or fully new - then the code is being held to the spec rather than to itself. If they don't, the green tick is decoration.
+
+---
+
+## 8. Verification
 
 ### Automated (`scratch/tests/`) - headless: real Git in temp dirs, a second Machine simulated by cloning. No network, no GitHub, no PyQt, no games.
 
