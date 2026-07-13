@@ -181,6 +181,86 @@ MUTATIONS = [
         "    if source.is_symlink():",
         "    if False:",
     ),
+    # --- git: the token, and the user's global config ---------------------------------------
+    Mutation(
+        "Leak the token onto the command line, where `ps` shows it to every process",
+        "core/git.py",
+        "        env = {PAT_ENV: pat} if pat is not None else {}",
+        "        argv += [str(pat)]\n        env = {PAT_ENV: pat} if pat is not None else {}",
+    ),
+    Mutation(
+        "Let the system keychain answer for credentials before our helper does",
+        "core/git.py",
+        '            argv += ["-c", "credential.helper="]',
+        "            pass",
+    ),
+    Mutation(
+        "Let Git prompt for a password - which, in a GUI with no terminal, is a hang",
+        "core/git.py",
+        '    env["GIT_TERMINAL_PROMPT"] = "0"',
+        '    env["GIT_TERMINAL_PROMPT"] = "1"',
+    ),
+    Mutation(
+        "Print the token in an error message, and thus into every log and crash report",
+        "core/git.py",
+        '    return text.replace(pat, "***")',
+        "    return text",
+    ),
+    Mutation(
+        "Inherit a stray token from the parent environment",
+        "core/git.py",
+        "    env.pop(PAT_ENV, None)",
+        "    pass",
+    ),
+    Mutation(
+        "Let a global core.autocrlf rewrite the line endings inside binary save files",
+        "core/git.py",
+        '    "core.autocrlf=false",',
+        "",
+    ),
+    # --- vault: cleanliness and selective sync -----------------------------------------------
+    Mutation(
+        "Use `git clean -fdx`, which deletes ignored files",
+        "core/vault.py",
+        '    repo.run("clean", "-fd")',
+        '    repo.run("clean", "-fdx")',
+    ),
+    Mutation(
+        "Drop the sidecar pin, so a Machine with nothing bound can see no Entry to bind",
+        "core/vault.py",
+        '    return ["machines", SIDECAR_PIN, *bound]',
+        '    return ["machines", *bound]',
+    ),
+    Mutation(
+        "Check out every Entry in the Vault, not just the bound ones",
+        "core/vault.py",
+        '    return ["machines", SIDECAR_PIN, *bound]',
+        '    return ["machines", "entries"]',
+    ),
+    Mutation(
+        "Clone every blob in the Vault's history rather than only what is bound",
+        "core/vault.py",
+        '        "--filter=blob:none",',
+        "",
+    ),
+    Mutation(
+        "Touch a Vault written by a newer build of the app",
+        "core/vault.py",
+        "    if schema > SCHEMA:",
+        "    if False:",
+    ),
+    Mutation(
+        "Commit save files into whatever repository the user pointed at",
+        "core/vault.py",
+        '    if data is None or not data.get("vault"):',
+        "    if False:",
+    ),
+    Mutation(
+        "Let Git attempt a textual three-way merge inside a binary save file",
+        "core/vault.py",
+        "/entries/** binary",
+        "",
+    ),
 ]
 
 
