@@ -361,7 +361,10 @@ def failures_under(tree: Path) -> list[str]:
         text=True,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
-    return re.findall(r"^FAILED (\S+)", proc.stdout, re.M)
+    # ERRORs count as much as FAILEDs. `-x` stops the run at the first of either, and a run
+    # that stopped on an error would otherwise report zero failures - making the mutation a
+    # SURVIVOR when in truth the suite went red before its catching test got a chance to.
+    return re.findall(r"^(?:FAILED|ERROR) (\S+)", proc.stdout, re.M)
 
 
 def main() -> int:

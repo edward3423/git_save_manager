@@ -39,6 +39,7 @@ heuristics happen to guess is text.
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import subprocess
@@ -143,10 +144,18 @@ def _git_executable() -> str:
     identical across platforms and turns a missing Git into a clear error before any
     subprocess is spawned.
     """
-    found = shutil.which("git")
+    found = _which_git(os.environ.get("PATH", ""), os.environ.get("PATHEXT", ""))
     if found is None:
         raise GitMissing("Git is not installed, or is not on PATH.")
     return found
+
+
+@functools.lru_cache(maxsize=8)
+def _which_git(path: str, pathext: str) -> str | None:
+    """`shutil.which` stats its way down every PATH directory, and Git runs hundreds of times
+    per session, so the answer is cached - keyed on the variables that could change it, which
+    is also what lets the tests repoint PATH at a fake and be honoured."""
+    return shutil.which("git")
 
 
 def _base_env() -> dict[str, str]:
