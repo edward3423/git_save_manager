@@ -326,7 +326,7 @@ MUTATIONS = [
     ),
     Mutation(
         "Author every commit as the same machine, so `git log` cannot say who synced what",
-        "core/operations.py",
+        "core/vault.py",
         '        f"user.name={description.hostname}",',
         '        "user.name=gsm",',
     ),
