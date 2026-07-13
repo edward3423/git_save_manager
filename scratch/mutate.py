@@ -345,9 +345,9 @@ MUTATIONS = [
         "Advance the Baseline on Pull, from the Pull side - stale Live Saves then read In Sync "
         "or Local Ahead, and the next Sync uploads old progress over another Machine's new",
         "core/cloud.py",
-        "            return Pulled(commits=behind, conflicts=conflicted_entries(self.paths))\n\n"
+        "            return Pulled(commits=behind, conflicts=_entries_of(unmerged))\n\n"
         "        return Pulled(commits=behind)",
-        "            return Pulled(commits=behind, conflicts=conflicted_entries(self.paths))\n\n"
+        "            return Pulled(commits=behind, conflicts=_entries_of(unmerged))\n\n"
         "        from core import hashing, ledger\n\n"
         "        the_ledger = ledger.load(self.paths)\n"
         "        for binding in the_ledger.bindings.values():\n"
@@ -419,8 +419,7 @@ MUTATIONS = [
     Mutation(
         "Accept a merge conflict outside entries/, resolving files that have one writer",
         "core/cloud.py",
-        "            foreign = [path for path in _unmerged_paths(self.paths) "
-        "if _entry_of(path) is None]",
+        "            foreign = [path for path in unmerged if _entry_of(path) is None]",
         "            foreign = []",
     ),
     Mutation(

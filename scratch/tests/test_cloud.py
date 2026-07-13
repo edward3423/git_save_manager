@@ -235,6 +235,9 @@ def test_a_pull_never_moves_the_baseline(laptop, desktop, shared_entry):
 
     assert pulled.conflicts == ()
     assert desktop.the_ledger.require(entry_id).baseline == baseline_before
+    # And the Ledger on disk agrees. A Pull that quietly persisted a Baseline would poison
+    # the next launch even while this session's in-memory copy stayed honest.
+    assert ledger.load(desktop.paths).require(entry_id).baseline == baseline_before
 
     status = desktop.state(entry_id)
     assert status.state is EntryState.VAULT_AHEAD
@@ -512,8 +515,9 @@ def test_a_successful_check_connection_is_the_way_back_online(desktop, unplugged
     assert desktop.cloud.fetch_status(pat=PAT).state is CloudState.UP_TO_DATE
 
 
-def test_offline_mode_remembers_the_last_known_cloud_state(desktop, laptop, unplugged):
-    """The indicator keeps showing what we knew: "Offline (last checked 2h ago: Behind)"."""
+def test_going_offline_keeps_the_last_known_cloud_state(desktop, laptop, unplugged):
+    """The indicator keeps showing what we knew: "Offline (last checked 2h ago: Behind)".
+    Entering Offline Mode must not clear `last_status` - it is the "last checked" half."""
     laptop.play("Elden Ring", "progress")
     laptop.add("Elden Ring")
     laptop.cloud.push(pat=PAT)
@@ -524,7 +528,7 @@ def test_offline_mode_remembers_the_last_known_cloud_state(desktop, laptop, unpl
     with pytest.raises(CloudOffline):
         desktop.cloud.pull(pat=PAT, description=desktop.description)
 
-    assert desktop.cloud.offline.last_known == before
+    assert desktop.cloud.last_status == before
     assert desktop.cloud.offline.since >= before.checked_at
 
 
@@ -556,12 +560,16 @@ def test_failures_are_classified_by_what_the_user_can_do_about_them():
         "fatal: Authentication failed for 'https://github.com/o/r.git/'",
         "remote: Invalid username or password.",
         "remote: Repository not found.",
+        "fatal: unable to access 'x': The requested URL returned error: 403",
         prompts_disabled,
     )
     network_shaped = (
         "fatal: unable to access 'x': Could not resolve host: github.com",
         "fatal: unable to access 'x': Failed to connect to github.com port 443",
         "fatal: 'cloud.git' does not appear to be a git repository",
+        # A locked pack file is not an auth problem: telling this user to re-enter a
+        # perfectly good PAT would send them in circles.
+        "error: unable to create file .git/objects/pack/tmp_pack: Permission denied",
     )
 
     for stderr in auth_shaped:

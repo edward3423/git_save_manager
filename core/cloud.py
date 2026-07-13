@@ -22,7 +22,7 @@ from core import vault
 from core.config import Config, MachineDescription
 from core.git import NETWORK_TIMEOUT, GitError, GitTimeout
 from core.paths import Paths
-from core.vault import git
+from core.vault import git, merging
 
 
 class CloudState(StrEnum):
@@ -61,9 +61,8 @@ class OfflineMode:
 
     reason: OfflineReason
     since: datetime
-    last_known: CloudStatus | None
-    """What we knew before the connection was lost, for the indicator:
-    "Offline (last checked 2h ago: Behind)"."""
+    """For the indicator, alongside `Cloud.last_status` - which going offline deliberately
+    does not clear: "Offline (last checked 2h ago: Behind)"."""
 
 
 class CloudOffline(Exception):
@@ -87,9 +86,11 @@ AUTH_SIGNS = (
     "invalid username or password",
     "could not read username",  # prompts are disabled, so no credential reached Git at all
     "repository not found",  # GitHub's answer for a private repo and a bad token alike
-    "permission denied",
-    "403",
-    "401",
+    # Anchored to curl's exact phrasing, not bare "403"/"permission denied": those substrings
+    # also appear in local-filesystem errors (an antivirus holding a pack file is "Permission
+    # denied"), and telling that user to re-enter a perfectly good PAT sends them in circles.
+    "the requested url returned error: 403",
+    "the requested url returned error: 401",
 )
 
 
@@ -141,11 +142,6 @@ def _is_rejection(error: GitError) -> bool:
 # --- Merge Conflicts, resolved at Entry granularity -------------------------------------------
 
 
-def merging(paths: Paths) -> bool:
-    """True while a Pull's merge is waiting for the user's Entry-granular choices."""
-    return (paths.vault_dir / ".git" / "MERGE_HEAD").exists()
-
-
 def _entry_of(path: str) -> str | None:
     """The Entry a Vault path belongs to: its content directory or its sidecar."""
     prefix, _, rest = path.partition("/")
@@ -161,10 +157,14 @@ def _unmerged_paths(paths: Paths) -> list[str]:
     return sorted({line.split("\t", 1)[1] for line in raw.splitlines() if "\t" in line})
 
 
+def _entries_of(unmerged: list[str]) -> tuple[str, ...]:
+    found = {_entry_of(path) for path in unmerged}
+    return tuple(sorted(entry_id for entry_id in found if entry_id is not None))
+
+
 def conflicted_entries(paths: Paths) -> tuple[str, ...]:
     """The Entries awaiting a choice, each to be taken whole from one side or the other."""
-    found = {_entry_of(path) for path in _unmerged_paths(paths)}
-    return tuple(sorted(entry_id for entry_id in found if entry_id is not None))
+    return _entries_of(_unmerged_paths(paths))
 
 
 class Side(StrEnum):
@@ -191,9 +191,8 @@ def resolve_merge(paths: Paths, entry_id: str, side: Side) -> None:
     specs = [f"entries/{entry_id}", f"entries/{entry_id}.json"]
 
     repo.run("rm", "-r", "-f", "-q", "--ignore-unmatch", "--", *specs)
-    present = [
-        spec for spec in specs if repo.run("ls-tree", "--name-only", source, "--", spec).strip()
-    ]
+    held = set(repo.run("ls-tree", "--name-only", source, "--", *specs).splitlines())
+    present = [spec for spec in specs if spec in held]
     if present:
         repo.run("restore", "--source", source, "--staged", "--worktree", "--", *present)
 
@@ -220,7 +219,12 @@ def abort_merge(paths: Paths) -> None:
 
 @dataclass
 class Cloud:
-    """This Machine's view of the Cloud Vault, including whether it is reachable at all."""
+    """This Machine's view of the Cloud Vault, including whether it is reachable at all.
+
+    **One instance per running application**, created at startup and shared by every
+    operation. Offline Mode's stickiness lives in this object and nowhere else, so a caller
+    constructing a fresh Cloud per operation would silently disable it.
+    """
 
     paths: Paths
     config: Config
@@ -244,11 +248,7 @@ class Cloud:
 
     def _lost(self, error: GitError | GitTimeout) -> CloudOffline:
         """Enter Offline Mode, and hand back the exception to raise in the operation's place."""
-        self.offline = OfflineMode(
-            reason=classify(error),
-            since=datetime.now(UTC),
-            last_known=self.last_status,
-        )
+        self.offline = OfflineMode(reason=classify(error), since=datetime.now(UTC))
         return CloudOffline(self.offline)
 
     def _fetch(self, pat: str) -> None:
@@ -271,21 +271,24 @@ class Cloud:
             self.offline = OfflineMode(
                 reason=classify(error),  # refreshed: "no network" may have become "bad PAT"
                 since=was.since if was else datetime.now(UTC),
-                last_known=was.last_known if was else self.last_status,
             )
             return False
 
         self.offline = None
         return True
 
+    def _ahead_behind(self) -> tuple[int, int]:
+        """Both counts in one process: left of `...` is the upstream's own commits (behind),
+        right is ours (ahead)."""
+        raw = git(self.paths).run("rev-list", "--left-right", "--count", f"{self.upstream}...HEAD")
+        behind, ahead = (int(part) for part in raw.split())
+        return ahead, behind
+
     def fetch_status(self, pat: str) -> CloudStatus:
         """Fetch, then say where HEAD stands. Observes only: never pulls, never pushes."""
         self._require_online()
-        repo = git(self.paths)
         self._fetch(pat)
-
-        ahead = int(repo.run("rev-list", "--count", f"{self.upstream}..HEAD").strip())
-        behind = int(repo.run("rev-list", "--count", f"HEAD..{self.upstream}").strip())
+        ahead, behind = self._ahead_behind()
 
         if ahead and behind:
             state = CloudState.DIVERGED
@@ -333,7 +336,7 @@ class Cloud:
         repo = git(self.paths)
 
         self._fetch(pat)
-        behind = int(repo.run("rev-list", "--count", f"HEAD..{self.upstream}").strip())
+        _, behind = self._ahead_behind()
         if behind == 0:
             return Pulled(commits=0)
 
@@ -359,7 +362,8 @@ class Cloud:
                 vault.ensure_clean(self.paths)
                 raise self._lost(error) from error
 
-            foreign = [path for path in _unmerged_paths(self.paths) if _entry_of(path) is None]
+            unmerged = _unmerged_paths(self.paths)
+            foreign = [path for path in unmerged if _entry_of(path) is None]
             if foreign:
                 abort_merge(self.paths)
                 raise ForeignConflict(
@@ -368,6 +372,6 @@ class Cloud:
                     "hand. The merge was aborted; nothing has changed."
                 ) from None
 
-            return Pulled(commits=behind, conflicts=conflicted_entries(self.paths))
+            return Pulled(commits=behind, conflicts=_entries_of(unmerged))
 
         return Pulled(commits=behind)
