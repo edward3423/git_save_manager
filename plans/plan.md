@@ -233,6 +233,14 @@ Considered and deliberately rejected. Recorded so they are not re-litigated.
 
 For those three, the thing to read is **the tests, not the implementation**. If they encode the scenarios from Section 8 - a Pull that must not move the Baseline; a stale Live plus a pulled Vault that must report **Vault Ahead** and not In Sync; a kill mid-restore that must leave the Live Save fully old or fully new - then the code is being held to the spec rather than to itself. If they don't, the green tick is decoration.
 
+Reading the tests is the first defence. `scratch/mutate.py` is the second:
+
+```
+uv run python scratch/mutate.py
+```
+
+It breaks the code on purpose - advance the Baseline on a Pull, swap Local Ahead for Vault Ahead, treat an empty directory as content - and reports which tests notice. A mutation that **survives** is a claim the suite does not actually check, and is worth more than a hundred passing assertions. Every new mutation is a way the code could plausibly be wrong, and usually a way it nearly was. It has already earned its keep twice: it caught a "safety guard" in `entry_state.py` that was vacuous - every branch hand-built a correct answer, so deleting the guard changed nothing and nothing proved it worked - and a real bug in `content_hash`, which hashed a symlinked Entry root as a link rather than as the folder it points at, so that a save folder on a second drive could never reach In Sync.
+
 ---
 
 ## 8. Verification

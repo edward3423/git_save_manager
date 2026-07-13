@@ -192,6 +192,56 @@ def test_a_directory_with_even_one_file_has_a_content_hash(tmp_path):
     assert content_hash(tree) is not None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_a_symlinked_entry_root_hashes_the_folder_it_points_at(tmp_path):
+    """Games' save folders are routinely symlinked to a second drive, and the Ledger keeps the
+    Binding unresolved on purpose. So the Entry's *root* is followed: the user bound the
+    folder the link leads to. Hash the link itself and the Live Save could never match its own
+    faithful copy in the Vault, which is a real directory - In Sync would be unreachable."""
+    real = make_tree(tmp_path / "on-the-other-drive", {"slot1.sav": "progress"})
+    link = tmp_path / "saves"
+    link.symlink_to(real)
+
+    assert content_hash(link) == content_hash(real)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_a_symlinked_single_file_entry_hashes_the_file_it_points_at(tmp_path):
+    real = tmp_path / "on-the-other-drive.ini"
+    real.write_text("volume=11", encoding="utf-8")
+    link = tmp_path / "settings.ini"
+    link.symlink_to(real)
+
+    assert content_hash(link) == content_hash(real)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_a_broken_root_symlink_has_no_content(tmp_path):
+    """The external drive is not mounted. No content, so the state machine reports Live Save
+    Missing and refuses to Sync the absence into the Vault - rather than crashing, or worse,
+    hashing the dangling link as if it were the save."""
+    link = tmp_path / "saves"
+    link.symlink_to(tmp_path / "unmounted-drive" / "saves")
+
+    assert content_hash(link) is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_a_symlink_inside_an_entry_is_still_never_followed(tmp_path):
+    """The root is followed; the contents are not. Following one here would pull data from
+    outside the Entry into its hash, and on Sync, into the Vault."""
+    outside = tmp_path / "outside.sav"
+    outside.write_text("not part of this entry", encoding="utf-8")
+
+    tree = make_tree(tmp_path / "entry", {"real.sav": "data"})
+    (tree / "link.sav").symlink_to(outside)
+    digest = content_hash(tree)
+
+    outside.write_text("changed outside the entry", encoding="utf-8")
+
+    assert content_hash(tree) == digest
+
+
 # --- the cache -------------------------------------------------------------------------
 
 

@@ -90,6 +90,16 @@ class EntryStatus:
     """Set when a lost Baseline should be healed to this value. See `evaluate`."""
 
 
+EVERYTHING = (Action.SYNC_TO_VAULT, Action.RESTORE_TO_LIVE, Action.UNBIND)
+"""What the three absence states offer *before* the guard subtracts the impossible.
+
+They do not hand-pick their actions. They ask for everything and let `_guard` remove what
+has no content to act on, which is the whole of what makes those states safe - so the guard
+is load-bearing rather than a backstop that never fires and is therefore never tested.
+Delete it and all three states immediately offer to destroy data.
+"""
+
+
 def _guard(offered: tuple[Action, ...], live: str | None, vault: str | None) -> tuple[Action, ...]:
     """Strip any action that would propagate an absence. Invariants 1 and 3, structurally."""
     forbidden = set()
@@ -132,7 +142,8 @@ def evaluate(live: str | None, vault: str | None, baseline: str | None) -> Entry
     # emphatically not an invitation to copy that nothingness in either direction. Usually a
     # Binding pointing at a path the game has not created yet, or a wrong path.
     if live is None and vault is None:
-        return _status(EntryState.NO_CONTENT, live, vault, baseline, offered=(Action.UNBIND,))
+        # The guard leaves only Unbind standing: there is nothing to copy in either direction.
+        return _status(EntryState.NO_CONTENT, live, vault, baseline, offered=EVERYTHING)
 
     # The equality short-circuit, and it runs *first*.
     #
@@ -172,13 +183,10 @@ def evaluate(live: str | None, vault: str | None, baseline: str | None) -> Entry
         # A Baseline exists, so the Vault *did* hold this Entry and now does not: another
         # Machine removed it. Re-adding and unbinding are both defensible and we cannot know
         # which was meant, so nothing is recommended and nothing is cleaned up silently.
-        return _status(
-            EntryState.REMOVED_FROM_VAULT,
-            live,
-            vault,
-            baseline,
-            offered=(Action.SYNC_TO_VAULT, Action.UNBIND),
-        )
+        #
+        # The guard removes Restore to Live, which would delete the Live Save (Invariant 1),
+        # leaving re-add and unbind.
+        return _status(EntryState.REMOVED_FROM_VAULT, live, vault, baseline, offered=EVERYTHING)
 
     if live is None:
         if baseline is None:
@@ -195,13 +203,10 @@ def evaluate(live: str | None, vault: str | None, baseline: str | None) -> Entry
         # A Baseline exists, so this Live Save was there and now is not. An unplugged drive
         # and a deliberate deletion look identical from here, and restoring over the former
         # would be wrong, so we recommend nothing and let the human decide.
-        return _status(
-            EntryState.LIVE_SAVE_MISSING,
-            live,
-            vault,
-            baseline,
-            offered=(Action.RESTORE_TO_LIVE, Action.UNBIND),
-        )
+        #
+        # The guard removes Sync to Vault, which would commit the absence and erase the
+        # Entry's content in the Vault (Invariant 3), leaving restore and unbind.
+        return _status(EntryState.LIVE_SAVE_MISSING, live, vault, baseline, offered=EVERYTHING)
 
     # Both sides have content and they differ. Now the Baseline earns its keep: it says which
     # side moved. With no Baseline at all, both sides read as changed, which is the honest

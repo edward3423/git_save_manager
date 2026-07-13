@@ -167,9 +167,21 @@ def content_hash(path: Path, cache: HashCache | None = None) -> str | None:
     refuses to Sync a contentless Live Save into the Vault, since that would erase the
     Entry's content there. An uninstalled game that leaves an empty save folder behind must
     not be able to trigger that, and it is empty rather than absent.
+
+    **The Entry's root is followed if it is a symlink; symlinks inside it are not.** These
+    look contradictory and are not, because they answer different questions. A symlinked root
+    is how the *user* named the Entry - `~/Library/.../Game` pointing at a second drive - and
+    they bound the folder it leads to, not the link itself. A symlink *inside* the Entry is
+    part of the save data, is stored by Git as a link, and must never be followed: doing so
+    would pull content from outside the Entry into its hash and, on Sync, into the Vault.
+    (`ledger.normalize_live_path` refuses to resolve the Binding for the same reason from the
+    other side: re-pointing the link later must move the Entry with it.)
+
+    A broken root symlink therefore has no content - which is exactly right, and is how the
+    unmounted external drive arrives at Live Save Missing rather than at a crash.
     """
     if path.is_symlink():
-        return hash_entry(path, cache)  # a symlink is content, and is never followed
+        path = path.resolve()
     if not path.exists():
         return None
     if path.is_dir():
