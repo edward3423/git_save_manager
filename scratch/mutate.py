@@ -354,8 +354,12 @@ def failures_under(tree: Path) -> list[str]:
     that: same length, same second. The harness reported a hole in the tests that did not
     exist, which is a nicely humbling instance of the very thing it is built to catch.
     """
+    # `--color=no` because the output is parsed, not read: under a color-forcing environment
+    # (FORCE_COLOR is set in some agent terminals) every FAILED line arrives wrapped in ANSI
+    # escapes, the regex below matches nothing, and all 50+ mutations report as SURVIVED at
+    # once - a false alarm distinguishable from a real one only by its implausible size.
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "--tb=no", "-x", "--no-header"],
+        [sys.executable, "-m", "pytest", "-q", "--tb=no", "-x", "--no-header", "--color=no"],
         cwd=tree,
         capture_output=True,
         text=True,
