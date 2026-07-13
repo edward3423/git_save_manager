@@ -48,10 +48,10 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
         os.fsync(handle.fileno())
 
     os.replace(staging, path)
-    _fsync_dir(path.parent)
+    fsync_dir(path.parent)
 
 
-def _fsync_dir(directory: Path) -> None:
+def fsync_dir(directory: Path) -> None:
     """Persist the rename itself, so a crash cannot leave the swap half-done.
 
     Not supported on every platform (notably Windows); harmless to skip where it isn't.

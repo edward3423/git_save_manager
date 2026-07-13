@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import IO
 
 SCHEME = b"gsm-hash-v1"
 _CHUNK = 1024 * 1024
@@ -63,6 +65,19 @@ class HashCache:
         self._entries.clear()
 
 
+def hash_stream(reader: IO[bytes]) -> str:
+    """SHA-256 of a binary stream. The one place file bytes are turned into a digest."""
+    digest = hashlib.sha256()
+    while chunk := reader.read(_CHUNK):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def hash_symlink(target: str) -> str:
+    """A symlink's digest is its target. Never its target's *contents*."""
+    return hashlib.sha256(b"symlink:" + target.encode("utf-8")).hexdigest()
+
+
 def hash_file(path: Path, cache: HashCache | None = None) -> str:
     """SHA-256 of one file's bytes. A symlink hashes as its target, and is never followed."""
     stat = path.lstat()
@@ -72,21 +87,53 @@ def hash_file(path: Path, cache: HashCache | None = None) -> str:
         if cached is not None:
             return cached
 
-    digest = hashlib.sha256()
     if path.is_symlink():
         # Recorded, not followed: following one could walk outside the Entry entirely, and
         # ignoring it would make a changed link invisible to the state machine.
-        digest.update(b"symlink:")
-        digest.update(os.readlink(path).encode("utf-8"))
+        result = hash_symlink(os.readlink(path))
     else:
         with path.open("rb") as handle:
-            while chunk := handle.read(_CHUNK):
-                digest.update(chunk)
+            result = hash_stream(handle)
 
-    result = digest.hexdigest()
     if cache is not None:
         cache.put(path, stat, result)
     return result
+
+
+# The two digest builders below are the *definition* of an Entry's hash. They take digests
+# rather than paths, so that content which is not on disk as a plain tree - a backup zip, say
+# - can be hashed under the identical scheme and compared directly against a Live Save. That
+# is what lets `backups.create` prove a zip faithfully captured the save before we overwrite
+# it, which matters because for progress never yet Synced, the zip is the only copy anywhere.
+
+
+def directory_digest(members: Iterable[tuple[str, str]]) -> str:
+    """Fold `(relative posix path, file digest)` pairs into one Entry digest.
+
+    Sorted here, so no caller can change the answer by handing them over in a different order.
+    """
+    digest = hashlib.sha256()
+    digest.update(SCHEME)
+    digest.update(b"dir")
+
+    for relative, file_hash in sorted(members):
+        encoded = relative.encode("utf-8")
+        # Length-prefixed so that no rearrangement of names and contents can collide with a
+        # different tree that happens to concatenate to the same bytes.
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        digest.update(bytes.fromhex(file_hash))
+
+    return digest.hexdigest()
+
+
+def file_digest(file_hash: str) -> str:
+    """Fold a single file's digest into an Entry digest. Never collides with a directory's."""
+    digest = hashlib.sha256()
+    digest.update(SCHEME)
+    digest.update(b"file")
+    digest.update(bytes.fromhex(file_hash))
+    return digest.hexdigest()
 
 
 def _walk_files(root: Path) -> list[tuple[str, Path]]:
@@ -106,19 +153,7 @@ def _walk_files(root: Path) -> list[tuple[str, Path]]:
 
 
 def _hash_files(files: list[tuple[str, Path]], cache: HashCache | None) -> str:
-    digest = hashlib.sha256()
-    digest.update(SCHEME)
-    digest.update(b"dir")
-
-    for relative, absolute in files:
-        encoded = relative.encode("utf-8")
-        # Length-prefixed so that no rearrangement of names and contents can collide with a
-        # different tree that happens to concatenate to the same bytes.
-        digest.update(len(encoded).to_bytes(8, "big"))
-        digest.update(encoded)
-        digest.update(bytes.fromhex(hash_file(absolute, cache)))
-
-    return digest.hexdigest()
+    return directory_digest((relative, hash_file(absolute, cache)) for relative, absolute in files)
 
 
 def hash_directory(path: Path, cache: HashCache | None = None) -> str:
@@ -137,12 +172,7 @@ def hash_entry(path: Path, cache: HashCache | None = None) -> str:
     """
     if path.is_dir() and not path.is_symlink():
         return hash_directory(path, cache)
-
-    digest = hashlib.sha256()
-    digest.update(SCHEME)
-    digest.update(b"file")
-    digest.update(bytes.fromhex(hash_file(path, cache)))
-    return digest.hexdigest()
+    return file_digest(hash_file(path, cache))
 
 
 def content_hash(path: Path, cache: HashCache | None = None) -> str | None:
