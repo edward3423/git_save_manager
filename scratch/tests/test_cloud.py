@@ -405,6 +405,25 @@ def test_a_removal_contested_by_a_sync_can_go_either_way(laptop, desktop, shared
     assert live.read_text(encoding="utf-8") == "progress the desktop still cares about"
 
 
+def test_a_conflict_outside_entries_aborts_the_merge_and_refuses(laptop, desktop):
+    """ADR-0003 makes this impossible from inside the app - every file outside entries/ has
+    one writer - so if it happens anyway, the Vault has been edited by hand and we refuse to
+    guess. The merge is aborted rather than left half-open."""
+    marker = f"machines/{MACHINE_A}.json"
+    for machine, text in ((laptop, '{"hand": "edited"}'), (desktop, '{"also": "edited"}')):
+        (machine.paths.vault_dir / marker).write_text(text, encoding="utf-8")
+        repo = vault.git(machine.paths)
+        repo.run("add", "-A")
+        repo.run("commit", "-q", "-m", "vandalism", config=("user.name=t", "user.email=t@x"))
+    laptop.cloud.push(pat=PAT)
+
+    with pytest.raises(cloud.ForeignConflict):
+        desktop.cloud.pull(pat=PAT, description=desktop.description)
+
+    assert not cloud.merging(desktop.paths)
+    assert vault.is_clean(desktop.paths)
+
+
 # --- Offline Mode: sticky, reasoned, and exited only by a successful Check Connection ------------
 
 
@@ -447,6 +466,17 @@ def test_offline_mode_is_sticky_even_after_the_network_returns(desktop, unplugge
         desktop.cloud.pull(pat=PAT, description=desktop.description)
     with pytest.raises(CloudOffline):
         desktop.cloud.fetch_status(pat=PAT)
+
+
+def test_a_failed_push_also_drops_into_offline_mode(desktop, unplugged):
+    desktop.register()
+    unplugged(False)
+
+    with pytest.raises(CloudOffline):
+        desktop.cloud.push(pat=PAT)
+
+    assert desktop.cloud.offline is not None
+    assert desktop.cloud.offline.reason is OfflineReason.NO_NETWORK
 
 
 def test_everything_purely_local_keeps_working_offline(desktop, unplugged):
