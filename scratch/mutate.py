@@ -92,8 +92,8 @@ MUTATIONS = [
     Mutation(
         "Hash a file's path but not its bytes, so no save ever looks changed",
         "core/hashing.py",
-        "        digest.update(bytes.fromhex(hash_file(absolute, cache)))",
-        "        pass",
+        "        digest.update(bytes.fromhex(file_hash))\n\n    return digest.hexdigest()",
+        "        pass\n\n    return digest.hexdigest()",
     ),
     Mutation(
         "Hash a symlinked Entry root as a link, so a save folder on a second drive never syncs",
@@ -106,6 +106,80 @@ MUTATIONS = [
         "core/hashing.py",
         "    if path.is_symlink():\n        # Recorded, not followed",
         "    if False:\n        # Recorded, not followed",
+    ),
+    # --- transaction: the only code that overwrites a Live Save ---------------------------
+    Mutation(
+        "Write into the Live Save directly instead of staging and swapping - a torn save",
+        "core/transaction.py",
+        "    source.materialize(staged)",
+        "    _remove(target)\n    source.materialize(target)\n    source.materialize(staged)",
+    ),
+    Mutation(
+        "Take the backup *after* the write, when the save it was meant to rescue is gone",
+        "core/transaction.py",
+        "    backup = None\n    if current.live_hash is not None:",
+        "    backup = None\n    if False:",
+    ),
+    Mutation(
+        "Trust the backup archive instead of verifying it hashes back to the save",
+        "core/backups.py",
+        "        if found != expected_hash:",
+        "        if False:",
+    ),
+    Mutation(
+        "Stage somewhere other than a sibling, so the swap crosses a filesystem",
+        "core/transaction.py",
+        '        target.parent / f".{target.name}.gsm-new",',
+        '        Path(tempfile.gettempdir()) / f"{target.name}.gsm-new",',
+    ),
+    Mutation(
+        "Swap the symlink itself rather than the folder it points at",
+        "core/transaction.py",
+        "    return live.resolve() if live.is_symlink() else live",
+        "    return live",
+    ),
+    Mutation(
+        "Roll forward onto a half-written staged copy after a crash mid-staging",
+        "core/transaction.py",
+        "    if journal.stage == Stage.BACKED_UP:",
+        "    if False:",
+    ),
+    Mutation(
+        "Abandon the Live Save when a crash lands between the two renames",
+        "core/transaction.py",
+        "    elif staged.exists() or staged.is_symlink():\n        # Caught inside the swap",
+        "    elif False:\n        # Caught inside the swap",
+    ),
+    Mutation(
+        "Never prune, so the retention setting silently does nothing",
+        "core/transaction.py",
+        "    pruned = backups.prune(paths, entry_id, config.backup_retention)",
+        "    pruned = []",
+    ),
+    Mutation(
+        "Prune to make room *before* the write, destroying a backup for a write that may fail",
+        "core/transaction.py",
+        "    backup = None\n    if current.live_hash is not None:",
+        "    backups.prune(paths, entry_id, config.backup_retention)\n"
+        "    backup = None\n    if current.live_hash is not None:",
+    ),
+    Mutation(
+        "Execute a write even though the Live Save moved since the user approved the preview",
+        "core/transaction.py",
+        "    if approved is not None and (",
+        "    if False and (",
+    ),
+    Mutation(
+        "Create the missing parent folder instead of refusing - writing under a mount point",
+        "core/transaction.py",
+        "    if not target.parent.is_dir():",
+        "    if False:",
+    ),
+    Mutation(
+        "Follow symlinks when archiving, baking a link's target into the backup",
+        "core/backups.py",
+        "    if source.is_symlink():",
+        "    if False:",
     ),
 ]
 

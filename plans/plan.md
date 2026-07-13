@@ -224,7 +224,7 @@ Considered and deliberately rejected. Recorded so they are not re-litigated.
 | `core/logger-config` - logger, config, Machine ID, keyring PAT | merged (#2) | autonomous |
 | `core/hashing` - file and directory content hashes, cache | merged (#3) | autonomous |
 | `core/ledger-state` - Ledger, Bindings, Baselines, the state machine | open (#4) | **human reads the diff** |
-| `core/transaction` - journaled Live writes, backups, startup recovery | | **human reads the diff** |
+| `core/transaction` - journaled Live writes, backups, startup recovery | open (#5) | **human reads the diff** |
 | `core/vault-git` - clone/sparse, Sync-as-one-commit, stable-read guard, history | | **human reads the diff** |
 | `core/github-bootstrap` - four bootstrap paths, `vault.json` marker, PAT hygiene | | autonomous |
 | `ui/*` - main window, dialogs, offline mode, Redo Initialization | | autonomous |
