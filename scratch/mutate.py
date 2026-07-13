@@ -261,6 +261,76 @@ MUTATIONS = [
         "/entries/** binary",
         "",
     ),
+    # --- operations: the stable-read guard, and who may write a Baseline ---------------------
+    Mutation(
+        "Drop the stable-read guard, committing a save the game was writing as we copied it",
+        "core/operations.py",
+        "    if not (before == after == captured):",
+        "    if False:",
+    ),
+    Mutation(
+        "Check only that the source held still, never that the copy came out faithful",
+        "core/operations.py",
+        "    if not (before == after == captured):",
+        "    if not (before == after):",
+    ),
+    Mutation(
+        "Check only that the copy is faithful, never that the game held still",
+        "core/operations.py",
+        "    if not (before == after == captured):",
+        "    if not (before == captured):",
+    ),
+    Mutation(
+        "Record the Baseline before the commit lands, so a failed commit leaves one that lies",
+        "core/operations.py",
+        "    commit = None\n    try:",
+        "    the_ledger.record_sync(entry_id, before, SyncDirection.TO_VAULT)\n"
+        "    commit = None\n    try:",
+    ),
+    Mutation(
+        "Leave the Vault dirty after an aborted Sync, so the next status refresh reads wreckage",
+        "core/operations.py",
+        "        vault.ensure_clean(paths)\n        raise",
+        "        raise",
+    ),
+    Mutation(
+        "Sync an empty Live Save, committing its absence and emptying the Entry",
+        "core/operations.py",
+        "    if before is None:",
+        "    if False:",
+    ),
+    Mutation(
+        "Move the Baseline when a Backup is restored, claiming a Sync that never happened",
+        "core/operations.py",
+        "    binding = the_ledger.require(entry_id)\n\n    return transaction.write_live(",
+        "    binding = the_ledger.require(entry_id)\n"
+        "    the_ledger.record_sync(\n"
+        "        entry_id, BackupSource(backup).digest(), SyncDirection.TO_LIVE\n"
+        "    )\n"
+        "    return transaction.write_live(",
+    ),
+    Mutation(
+        "Roll back with a hard reset, destroying the history you rolled away from",
+        "core/operations.py",
+        '    repo.run("restore", "--source", sha, "--staged", "--worktree", "--", content)',
+        '    repo.run("reset", "--hard", sha)',
+    ),
+    Mutation(
+        "Author every commit as the same machine, so `git log` cannot say who synced what",
+        "core/operations.py",
+        '        f"user.name={description.hostname}",',
+        '        "user.name=gsm",',
+    ),
+    Mutation(
+        "Delete the Live Save when the Entry is removed from the Vault",
+        "core/operations.py",
+        "    the_ledger.unbind(entry_id)\n    ledger.save(paths, the_ledger)\n"
+        "    vault.set_sparse(paths, the_ledger.bindings)\n\n"
+        '    log().info("Removed %s from the Vault. No Live Save was touched.", entry.name)',
+        "    shutil.rmtree(the_ledger.require(entry_id).live, ignore_errors=True)\n"
+        "    the_ledger.unbind(entry_id)\n    ledger.save(paths, the_ledger)\n"
+        "    vault.set_sparse(paths, the_ledger.bindings)",
+    ),
 ]
 
 
