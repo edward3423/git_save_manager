@@ -82,4 +82,11 @@ The result of comparing an Entry's Live Save and Vault content against its Basel
 - **Local Ahead** - the Live Save changed; the Vault has not.
 - **Vault Ahead** - the Vault changed (typically by a Pull); the Live Save has not.
 - **Conflict** - both sides changed since the Baseline. The only state requiring a human decision.
+- **Live Save Missing** - the Live Save is gone, though a Baseline says it was there. An unplugged drive, or an uninstalled game.
+- **Removed from Vault** - another Machine removed the Entry from the Vault, though a Baseline says it was there.
+- **No Content** - neither side holds anything. Usually a Binding pointing at a path the game has not created yet.
 _Avoid_: dirty, modified, out of date, stale
+
+**No Content**:
+An Entry side holds no content when its path does not exist *or* when it is a directory containing no files. Git stores no empty directories, so the Vault cannot tell those two apart - and neither, therefore, may we. See [ADR-0006](docs/adr/0006-absence-never-propagates.md).
+_Avoid_: empty (ambiguous: an empty *file* is content)
