@@ -5,6 +5,7 @@ to overwrite a save. So the tests here are less about persistence than about who
 to write one, and when.
 """
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -208,7 +209,7 @@ def test_a_ledger_round_trips_through_disk(paths):
     loaded = load(paths)
 
     assert loaded.get(ENTRY).baseline == "hash-a"
-    assert loaded.get(ENTRY).live_path == "/games/save"
+    assert loaded.get(ENTRY).live == Path("/games/save")  # same place, whatever the separator
     assert loaded.get(ENTRY).last_sync_direction == "to_vault"
 
 
@@ -237,6 +238,7 @@ def test_a_home_relative_path_is_expanded_once_at_bind_time():
     assert not normalize_live_path("~/saves").startswith("~")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
 def test_a_symlinked_save_folder_is_not_resolved_away(tmp_path):
     """Games' save folders are routinely symlinked to another drive. Resolving the link at
     bind time would pin the Binding to whatever it pointed at that day, so re-pointing it
