@@ -5,8 +5,13 @@ own `argv` and environment, and then assert against what a real Git would actual
 received. Mocking the call would only prove that we called our own mock the way we expected
 to; this proves the token is not on the command line, where `ps` would show it to every other
 process on the machine.
+
+The fake is a shell script on POSIX and a batch file on Windows. The two record differently -
+one argument per line versus the raw command-line tail, which is exactly what Task Manager
+would show - so the assertions here are written to hold for both shapes.
 """
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -22,6 +27,26 @@ from core.git import (
 
 TOKEN = "ghp_a-real-looking-secret-token"
 
+WINDOWS = os.name == "nt"
+
+
+def fake_git(directory: Path, posix: str, windows: str) -> None:
+    """Drop a fake `git` into `directory`, in whichever language this OS can execute."""
+    if WINDOWS:
+        (directory / "git.bat").write_text(windows, encoding="utf-8", newline="\r\n")
+    else:
+        script = directory / "git"
+        script.write_text(posix, encoding="utf-8")
+        script.chmod(0o755)
+
+
+def fake_path(directory: Path) -> str:
+    """A PATH that resolves `git` to the fake, and still lets the fake run its own tools."""
+    if WINDOWS:
+        system32 = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32"
+        return f"{directory}{os.pathsep}{system32}"
+    return f"{directory}:{Path('/usr/bin')}:{Path('/bin')}"
+
 
 @pytest.fixture
 def spy(tmp_path, monkeypatch):
@@ -31,13 +56,14 @@ def spy(tmp_path, monkeypatch):
 
     binary = tmp_path / "bin"
     binary.mkdir()
-    (binary / "git").write_text(
-        '#!/bin/sh\nprintf "%s\\n" "$@" > "$GSM_RECORD/argv"\nenv > "$GSM_RECORD/env"\nexit 0\n',
-        encoding="utf-8",
+    fake_git(
+        binary,
+        posix='#!/bin/sh\nprintf "%s\\n" "$@" > "$GSM_RECORD/argv"\nenv > "$GSM_RECORD/env"\n'
+        "exit 0\n",
+        windows='@echo off\n>"%GSM_RECORD%\\argv" echo %*\n>"%GSM_RECORD%\\env" set\nexit /b 0\n',
     )
-    (binary / "git").chmod(0o755)
 
-    monkeypatch.setenv("PATH", f"{binary}:{Path('/usr/bin')}:{Path('/bin')}")
+    monkeypatch.setenv("PATH", fake_path(binary))
     monkeypatch.setenv("GSM_RECORD", str(recorded))
 
     class Spy:
@@ -90,12 +116,16 @@ def test_the_system_credential_helper_is_reset_first(tmp_path, spy):
     Manager) answers first, with whatever stale credential it happens to be holding - and our
     helper, which has the right one, is never asked."""
     Git(tmp_path).run("push", "origin", "main", pat=TOKEN)
+    argv = spy.argv_text()
 
-    lines = spy.argv_text().splitlines()
-    reset = lines.index("credential.helper=")
-    ours = next(i for i, line in enumerate(lines) if line.startswith("credential.helper=!f()"))
+    # The first `credential.helper=` in argv must be the bare reset - nothing glued onto it -
+    # with our own helper somewhere after. Position, not line numbers: the two recording
+    # formats agree on order but not on layout.
+    first = argv.index("credential.helper=")
+    following = argv[first + len("credential.helper=") :][:1]
 
-    assert reset < ours
+    assert following in ("", " ", "\n")
+    assert "credential.helper=!f()" in argv
 
 
 def test_no_credential_helper_is_configured_for_local_commands(tmp_path, spy):
@@ -120,12 +150,12 @@ def test_a_token_is_redacted_out_of_an_error(tmp_path, monkeypatch):
     a log file, a crash report, or a screenshot."""
     binary = tmp_path / "bin"
     binary.mkdir()
-    (binary / "git").write_text(
-        f'#!/bin/sh\necho "fatal: authentication failed for {TOKEN}" >&2\nexit 128\n',
-        encoding="utf-8",
+    fake_git(
+        binary,
+        posix=f'#!/bin/sh\necho "fatal: authentication failed for {TOKEN}" >&2\nexit 128\n',
+        windows=f"@echo off\necho fatal: authentication failed for {TOKEN} 1>&2\nexit /b 128\n",
     )
-    (binary / "git").chmod(0o755)
-    monkeypatch.setenv("PATH", f"{binary}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", fake_path(binary))
 
     with pytest.raises(GitError) as raised:
         Git(tmp_path).run("push", pat=TOKEN)
@@ -144,7 +174,9 @@ def test_git_is_never_allowed_to_prompt(tmp_path, spy):
     env = spy.env_lines()
 
     assert env["GIT_TERMINAL_PROMPT"] == "0"
-    assert env["GIT_ASKPASS"] == ""
+    # Windows cannot represent an empty environment variable, so `set` records it as absent.
+    # Absent and empty both mean the same thing here: no askpass program will ever run.
+    assert env.get("GIT_ASKPASS", "") == ""
 
 
 def test_the_users_global_config_cannot_reach_the_vault(tmp_path, spy):
@@ -183,9 +215,15 @@ def test_a_missing_git_is_reported_clearly(tmp_path, monkeypatch):
 def test_a_hanging_command_times_out_rather_than_wedging_the_app(tmp_path, monkeypatch):
     binary = tmp_path / "bin"
     binary.mkdir()
-    (binary / "git").write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
-    (binary / "git").chmod(0o755)
-    monkeypatch.setenv("PATH", f"{binary}:/usr/bin:/bin")
+    fake_git(
+        binary,
+        posix="#!/bin/sh\nsleep 30\n",
+        # `ping` is the batch idiom for sleeping (`timeout` refuses redirected stdin), and it
+        # is kept short: it inherits the stdout pipe, and killing cmd.exe does not kill it,
+        # so the test waits for it regardless of the 0.5s Git timeout.
+        windows="@ping -n 4 127.0.0.1 > nul\n",
+    )
+    monkeypatch.setenv("PATH", fake_path(binary))
 
     with pytest.raises(GitTimeout):
         Git(tmp_path, timeout=0.5).run("fetch")

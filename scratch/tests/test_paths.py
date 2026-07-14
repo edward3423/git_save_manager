@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from core.paths import Paths, WorkspaceNotWritable, check_writable, is_root_user
@@ -57,6 +59,7 @@ def test_check_writable_creates_the_data_dir(tmp_path):
 
 
 @pytest.mark.skipif(is_root_user(), reason="root bypasses file permissions")
+@pytest.mark.skipif(os.name == "nt", reason="chmod does not restrict directories on Windows")
 def test_check_writable_refuses_a_read_only_workspace(tmp_path):
     workspace = tmp_path / "readonly"
     workspace.mkdir()

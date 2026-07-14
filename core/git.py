@@ -39,7 +39,9 @@ heuristics happen to guess is text.
 
 from __future__ import annotations
 
+import functools
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -101,7 +103,7 @@ class Git:
         `pat` is injected via the environment and an inline credential helper, never into
         `argv` and never into `.git/config`. Pass it only to commands that reach the network.
         """
-        argv = ["git", "-C", str(self.work_tree)]
+        argv = [_git_executable(), "-C", str(self.work_tree)]
 
         for setting in SAFE_CONFIG + config:
             argv += ["-c", setting]
@@ -132,6 +134,28 @@ class Git:
             raise GitError(argv, completed.returncode, _redact(completed.stderr, pat))
 
         return completed.stdout
+
+
+def _git_executable() -> str:
+    """Resolve `git` on PATH ourselves rather than leaving it to the OS.
+
+    On Windows, `CreateProcess` resolves a bare `git` to `git.exe` only - it ignores
+    `PATHEXT` - whereas `shutil.which` honours it. Resolving here keeps the behaviour
+    identical across platforms and turns a missing Git into a clear error before any
+    subprocess is spawned.
+    """
+    found = _which_git(os.environ.get("PATH", ""), os.environ.get("PATHEXT", ""))
+    if found is None:
+        raise GitMissing("Git is not installed, or is not on PATH.")
+    return found
+
+
+@functools.lru_cache(maxsize=8)
+def _which_git(path: str, pathext: str) -> str | None:
+    """`shutil.which` stats its way down every PATH directory, and Git runs hundreds of times
+    per session, so the answer is cached - keyed on the variables that could change it, which
+    is also what lets the tests repoint PATH at a fake and be honoured."""
+    return shutil.which("git")
 
 
 def _base_env() -> dict[str, str]:

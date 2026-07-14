@@ -38,6 +38,11 @@ class Mutation:
     before: str
     after: str
 
+    requires_symlinks: bool = False
+    """The tests that would catch this are skipped on Windows (symlinks need privileges), so
+    running it there reports a hole in the tests that is really a hole in the platform. It is
+    skipped under the same condition the tests use, and still runs everywhere CI does."""
+
 
 MUTATIONS = [
     Mutation(
@@ -100,12 +105,14 @@ MUTATIONS = [
         "core/hashing.py",
         "    if path.is_symlink():\n        path = path.resolve()",
         "    if False:\n        path = path.resolve()",
+        requires_symlinks=True,
     ),
     Mutation(
         "Follow symlinks *inside* an Entry, pulling content from outside it into the Vault",
         "core/hashing.py",
         "    if path.is_symlink():\n        # Recorded, not followed",
         "    if False:\n        # Recorded, not followed",
+        requires_symlinks=True,
     ),
     # --- transaction: the only code that overwrites a Live Save ---------------------------
     Mutation(
@@ -137,6 +144,7 @@ MUTATIONS = [
         "core/transaction.py",
         "    return live.resolve() if live.is_symlink() else live",
         "    return live",
+        requires_symlinks=True,
     ),
     Mutation(
         "Roll forward onto a half-written staged copy after a crash mid-staging",
@@ -180,6 +188,7 @@ MUTATIONS = [
         "core/backups.py",
         "    if source.is_symlink():",
         "    if False:",
+        requires_symlinks=True,
     ),
     # --- git: the token, and the user's global config ---------------------------------------
     Mutation(
@@ -345,18 +354,26 @@ def failures_under(tree: Path) -> list[str]:
     that: same length, same second. The harness reported a hole in the tests that did not
     exist, which is a nicely humbling instance of the very thing it is built to catch.
     """
+    # `--color=no` because the output is parsed, not read: under a color-forcing environment
+    # (FORCE_COLOR is set in some agent terminals) every FAILED line arrives wrapped in ANSI
+    # escapes, the regex below matches nothing, and all 50+ mutations report as SURVIVED at
+    # once - a false alarm distinguishable from a real one only by its implausible size.
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "--tb=no", "-x", "--no-header"],
+        [sys.executable, "-m", "pytest", "-q", "--tb=no", "-x", "--no-header", "--color=no"],
         cwd=tree,
         capture_output=True,
         text=True,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
-    return re.findall(r"^FAILED (\S+)", proc.stdout, re.M)
+    # ERRORs count as much as FAILEDs. `-x` stops the run at the first of either, and a run
+    # that stopped on an error would otherwise report zero failures - making the mutation a
+    # SURVIVOR when in truth the suite went red before its catching test got a chance to.
+    return re.findall(r"^(?:FAILED|ERROR) (\S+)", proc.stdout, re.M)
 
 
 def main() -> int:
     survivors = 0
+    skipped = 0
 
     with tempfile.TemporaryDirectory() as workspace:
         tree = Path(workspace) / "tree"
@@ -367,6 +384,12 @@ def main() -> int:
         )
 
         for mutation in MUTATIONS:
+            if mutation.requires_symlinks and os.name == "nt":
+                skipped += 1
+                print(f"skipped   {mutation.describes}")
+                print("          Its tests skip on Windows; run this on CI or a POSIX box.\n")
+                continue
+
             target = tree / mutation.file
             original = target.read_text(encoding="utf-8")
 
@@ -396,7 +419,9 @@ def main() -> int:
         print(f"{survivors} mutation(s) survived. Each one is a hole in the tests.")
         return 1
 
-    print(f"All {len(MUTATIONS)} mutations were caught.")
+    ran = len(MUTATIONS) - skipped
+    trailer = f" ({skipped} skipped on this platform.)" if skipped else ""
+    print(f"All {ran} mutations were caught.{trailer}")
     return 0
 
 
