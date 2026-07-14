@@ -227,7 +227,7 @@ Considered and deliberately rejected. Recorded so they are not re-litigated.
 | `core/transaction` - journaled Live writes, backups, startup recovery | merged (#5) | **human reads the diff** |
 | `core/vault-git` - the Git driver, PAT hygiene, clone/sparse, Invariant 2 | merged (#6) | **human reads the diff** |
 | `core/vault-ops` - Sync-as-one-commit, stable-read guard, history, rollback | merged (#7) | **human reads the diff** |
-| `core/cloud` - Pull/Push, fetch status, Offline Mode, Merge Conflict resolution | open (#9) | autonomous |
+| `core/cloud` - Pull/Push, fetch status, Offline Mode, Merge Conflict resolution | merged (#9) | autonomous |
 | `core/github-bootstrap` - four bootstrap paths, `vault.json` marker, PAT hygiene | | autonomous |
 | `ui/*` - main window, dialogs, offline mode, Redo Initialization | | autonomous |
 
