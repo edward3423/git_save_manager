@@ -111,6 +111,17 @@ def git(paths: Paths) -> Git:
     return Git(work_tree=paths.vault_dir)
 
 
+def commit_identity(config: Config, description: MachineDescription) -> tuple[str, ...]:
+    """Author commits as this Machine, so `git log` answers "who made this?" directly.
+
+    Passed per-invocation with `-c`, never written into `.git/config`.
+    """
+    return (
+        f"user.name={description.hostname}",
+        f"user.email={config.machine_id}@gsm.local",
+    )
+
+
 # --- the shape of the repository -----------------------------------------------------------
 
 
@@ -214,6 +225,11 @@ def is_clean(paths: Paths) -> bool:
     return git(paths).run("status", "--porcelain").strip() == ""
 
 
+def merging(paths: Paths) -> bool:
+    """A merge is in flight: mid-Pull awaiting Entry-granular choices, or crash wreckage."""
+    return (paths.vault_dir / ".git" / "MERGE_HEAD").exists()
+
+
 def ensure_clean(paths: Paths) -> None:
     """Return the working tree to HEAD, whatever a previous operation left behind.
 
@@ -223,7 +239,7 @@ def ensure_clean(paths: Paths) -> None:
     """
     repo = git(paths)
 
-    if (paths.vault_dir / ".git" / "MERGE_HEAD").exists():
+    if merging(paths):
         repo.run("merge", "--abort", check=False)
 
     repo.run("reset", "--hard")

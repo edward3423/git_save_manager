@@ -77,20 +77,9 @@ class NothingToSync(Exception):
 # --- commits carry the Machine that made them ---------------------------------------------
 
 
-def _identity(config: Config, description: MachineDescription) -> tuple[str, ...]:
-    """Author the commit as this Machine, so `git log` answers "who synced this?" directly.
-
-    Passed per-invocation with `-c`, never written into `.git/config`.
-    """
-    return (
-        f"user.name={description.hostname}",
-        f"user.email={config.machine_id}@gsm.local",
-    )
-
-
 def _commit(paths: Paths, config: Config, description: MachineDescription, message: str) -> str:
     repo = git(paths)
-    repo.run("commit", "-m", message, config=_identity(config, description))
+    repo.run("commit", "-m", message, config=vault.commit_identity(config, description))
     return repo.run("rev-parse", "HEAD").strip()
 
 

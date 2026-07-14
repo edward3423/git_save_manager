@@ -326,7 +326,7 @@ MUTATIONS = [
     ),
     Mutation(
         "Author every commit as the same machine, so `git log` cannot say who synced what",
-        "core/operations.py",
+        "core/vault.py",
         '        f"user.name={description.hostname}",',
         '        "user.name=gsm",',
     ),
@@ -339,6 +339,94 @@ MUTATIONS = [
         "    shutil.rmtree(the_ledger.require(entry_id).live, ignore_errors=True)\n"
         "    the_ledger.unbind(entry_id)\n    ledger.save(paths, the_ledger)\n"
         "    vault.set_sparse(paths, the_ledger.bindings)",
+    ),
+    # --- cloud: Pull, Push, Offline Mode, and who may write a Baseline ------------------------
+    Mutation(
+        "Advance the Baseline on Pull, from the Pull side - stale Live Saves then read In Sync "
+        "or Local Ahead, and the next Sync uploads old progress over another Machine's new",
+        "core/cloud.py",
+        "            return Pulled(commits=behind, conflicts=_entries_of(unmerged))\n\n"
+        "        return Pulled(commits=behind)",
+        "            return Pulled(commits=behind, conflicts=_entries_of(unmerged))\n\n"
+        "        from core import hashing, ledger\n\n"
+        "        the_ledger = ledger.load(self.paths)\n"
+        "        for binding in the_ledger.bindings.values():\n"
+        "            binding.baseline = hashing.content_hash(\n"
+        "                self.paths.entry_content_dir(binding.entry_id)\n"
+        "            )\n"
+        "        ledger.save(self.paths, the_ledger)\n"
+        "        return Pulled(commits=behind)",
+    ),
+    Mutation(
+        "Pull with a rebase, rewriting this Machine's published history",
+        "core/cloud.py",
+        '                "merge",\n'
+        '                "-m",\n'
+        '                f"pull({self.branch}): from {description.hostname}",\n'
+        "                self.upstream,",
+        '                "rebase",\n                self.upstream,',
+    ),
+    Mutation(
+        "Force the push, erasing whatever the other Machine published first",
+        "core/cloud.py",
+        '            git(self.paths).run("push", "origin", self.branch, pat=pat, '
+        "timeout=NETWORK_TIMEOUT)",
+        "            git(self.paths).run(\n"
+        '                "push", "--force", "origin", self.branch, pat=pat, '
+        "timeout=NETWORK_TIMEOUT\n"
+        "            )",
+    ),
+    Mutation(
+        "Let Offline Mode heal itself, so operations quietly retry a network the user was "
+        "told is gone",
+        "core/cloud.py",
+        "        if self.offline is not None:\n            raise CloudOffline(self.offline)",
+        "        if False:\n            raise CloudOffline(self.offline)",
+    ),
+    Mutation(
+        "Report the connection restored without ever probing it",
+        "core/cloud.py",
+        '            git(self.paths).run("ls-remote", "origin", "HEAD", pat=pat, '
+        "timeout=NETWORK_TIMEOUT)",
+        "            pass",
+    ),
+    Mutation(
+        "Treat a rejected push as a lost connection, greying out the very Pull that fixes it",
+        "core/cloud.py",
+        "            if _is_rejection(error):",
+        "            if False:",
+    ),
+    Mutation(
+        "Treat a lost connection as a rejected push, so the app never enters Offline Mode",
+        "core/cloud.py",
+        "            if _is_rejection(error):",
+        "            if True:",
+    ),
+    Mutation(
+        "Classify a revoked PAT as a network problem, so the user is never asked for a new one",
+        "core/cloud.py",
+        "    if any(sign in text for sign in AUTH_SIGNS):\n"
+        "        return OfflineReason.AUTH_FAILED\n"
+        "    return OfflineReason.NO_NETWORK",
+        "    return OfflineReason.NO_NETWORK",
+    ),
+    Mutation(
+        "Pull without re-establishing Invariant 2, folding stray files into the merge",
+        "core/cloud.py",
+        "        self._require_online()\n        vault.ensure_clean(self.paths)",
+        "        self._require_online()",
+    ),
+    Mutation(
+        "Accept a merge conflict outside entries/, resolving files that have one writer",
+        "core/cloud.py",
+        "            foreign = [path for path in unmerged if _entry_of(path) is None]",
+        "            foreign = []",
+    ),
+    Mutation(
+        "Commit the merge while Entries are still unresolved",
+        "core/cloud.py",
+        "    unresolved = conflicted_entries(paths)\n    if unresolved:",
+        "    unresolved = conflicted_entries(paths)\n    if False:",
     ),
 ]
 

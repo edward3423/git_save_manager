@@ -223,11 +223,11 @@ Considered and deliberately rejected. Recorded so they are not re-litigated.
 | `chore/scaffold` - tooling, package layout, `data/` paths | merged (#1) | autonomous |
 | `core/logger-config` - logger, config, Machine ID, keyring PAT | merged (#2) | autonomous |
 | `core/hashing` - file and directory content hashes, cache | merged (#3) | autonomous |
-| `core/ledger-state` - Ledger, Bindings, Baselines, the state machine | open (#4) | **human reads the diff** |
-| `core/transaction` - journaled Live writes, backups, startup recovery | open (#5) | **human reads the diff** |
-| `core/vault-git` - the Git driver, PAT hygiene, clone/sparse, Invariant 2 | open (#6) | **human reads the diff** |
-| `core/vault-ops` - Sync-as-one-commit, stable-read guard, history, rollback | open (#7) | **human reads the diff** |
-| `core/cloud` - Pull/Push, fetch status, Offline Mode, GitHub bootstrap | | autonomous |
+| `core/ledger-state` - Ledger, Bindings, Baselines, the state machine | merged (#4) | **human reads the diff** |
+| `core/transaction` - journaled Live writes, backups, startup recovery | merged (#5) | **human reads the diff** |
+| `core/vault-git` - the Git driver, PAT hygiene, clone/sparse, Invariant 2 | merged (#6) | **human reads the diff** |
+| `core/vault-ops` - Sync-as-one-commit, stable-read guard, history, rollback | merged (#7) | **human reads the diff** |
+| `core/cloud` - Pull/Push, fetch status, Offline Mode, Merge Conflict resolution | open (#9) | autonomous |
 | `core/github-bootstrap` - four bootstrap paths, `vault.json` marker, PAT hygiene | | autonomous |
 | `ui/*` - main window, dialogs, offline mode, Redo Initialization | | autonomous |
 
