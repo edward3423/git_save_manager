@@ -469,7 +469,7 @@ MUTATIONS = [
     Mutation(
         "Put the token in the URL, where every proxy log and traceback can read it",
         "core/github.py",
-        '    return urllib.request.Request(API_ROOT + path, data=data, method=method, '
+        "    return urllib.request.Request(API_ROOT + path, data=data, method=method, "
         "headers=headers)",
         "    return urllib.request.Request(\n"
         '        API_ROOT + path + f"?access_token={token}", data=data, method=method, '

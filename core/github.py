@@ -266,5 +266,3 @@ def _discard_clone(paths: Paths) -> None:
         func(path)
 
     shutil.rmtree(paths.vault_dir, onexc=force)
-
-
