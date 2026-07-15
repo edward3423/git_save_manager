@@ -114,6 +114,38 @@ def test_a_failure_during_startup_releases_the_lock(paths, monkeypatch):
     startup.start(paths).shutdown()  # not AlreadyRunning: the failed attempt let go
 
 
+def test_reset_brings_the_app_back_to_first_run_without_a_restart(paths):
+    """After a Redo Initialization the running window must behave like a first launch:
+    fresh identity, empty Ledger, a Cloud that is neither offline nor remembering."""
+    from core import config as config_module
+    from core import redo
+
+    class NoStore:
+        def get_pat(self):
+            return None
+
+        def set_pat(self, token):
+            pass
+
+        def delete_pat(self):
+            pass
+
+    app = startup.start(paths)
+    was = app.config.machine_id
+    app.config.repo = "owner/vault"
+    config_module.save(paths, app.config)
+
+    redo.execute(paths, NoStore())
+    app.reset()
+    app.shutdown()
+
+    assert app.config.machine_id != was  # a fresh identity was generated and persisted
+    assert app.config.is_set_up is False
+    assert app.the_ledger.bindings == {}
+    assert app.cloud.offline is None
+    assert app.cloud.last_status is None
+
+
 def test_startup_does_not_invent_a_vault(paths):
     """Before setup there is no Vault, and startup must not create one - `git init` here
     would make every later bootstrap path think it is joining an existing repository."""

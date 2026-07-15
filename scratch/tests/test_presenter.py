@@ -183,6 +183,23 @@ def test_bind_hints_cite_other_machines_but_never_this_one(machine):
     assert hints == ["desktop (Windows): D:/GameSaves/EldenRing"]  # never our own binding
 
 
+def test_the_redo_confirmation_enumerates_every_deletion_and_what_survives(machine):
+    """Plan Section 4: the confirmation enumerates every path and keyring entry it will
+    delete - and says out loud what it will never touch."""
+    from core import redo
+
+    paths, config, description = machine
+    (paths.data_dir / "config.json").write_text("{}", encoding="utf-8")
+
+    lines = presenter.redo_lines(redo.plan(paths))
+
+    assert lines[0] == "This will permanently delete:"
+    assert f"  - {paths.config_file}" in lines
+    assert f"  - {paths.vault_dir}" in lines
+    assert f"  - {redo.PAT_ENTRY}" in lines
+    assert lines[-1] == "Never touched: every Backup in backups/, and every Live Save."
+
+
 def test_sizes_read_like_a_human_wrote_them():
     assert presenter.size_text(512) == "512 B"
     assert presenter.size_text(2048) == "2.0 KB"

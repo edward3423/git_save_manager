@@ -190,6 +190,25 @@ def rename_entry(
     return entry
 
 
+def adopt_bindings(
+    paths: Paths,
+    the_ledger: Ledger,
+    published: dict[str, str],
+    pat: str | None = None,
+) -> None:
+    """Re-bind everything an adopted identity had published (see `github.bootstrap`).
+
+    Local only: the published file already carries these Bindings, so nothing needs a
+    commit. No Baselines are written - the content just arrived from the Cloud, and each
+    Entry reads Vault Ahead (or In Sync, where the Live Save already matches) from there.
+    """
+    for entry_id, live_path in published.items():
+        the_ledger.bind(entry_id, Path(live_path))
+    ledger.save(paths, the_ledger)
+    vault.set_sparse(paths, the_ledger.bindings, pat=pat)
+    log().info("Adopted %d published Binding(s).", len(published))
+
+
 def bind_entry(
     paths: Paths,
     config: Config,
@@ -197,6 +216,7 @@ def bind_entry(
     the_ledger: Ledger,
     entry_id: str,
     live_path: Path,
+    pat: str | None = None,
 ) -> None:
     """Bind an Unlinked Entry to a path on this Machine, publish it, and widen the cone.
 
@@ -209,7 +229,7 @@ def bind_entry(
 
     the_ledger.bind(entry_id, live_path)
     ledger.save(paths, the_ledger)
-    vault.set_sparse(paths, the_ledger.bindings)
+    vault.set_sparse(paths, the_ledger.bindings, pat=pat)
 
     _publish_bindings(paths, config, description, the_ledger)
     _commit(paths, config, description, f"bind({entry.name}): from {description.hostname}")

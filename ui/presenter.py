@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from core import entries, ledger, vault
+from core import entries, ledger, redo, vault
 from core.cloud import Cloud, CloudState
 from core.config import Config
 from core.entry_state import EntryState, EntryStatus
@@ -152,6 +152,16 @@ def preview_lines(preview: Preview) -> list[str]:
         if preview.will_back_up
         else "No Backup is taken: the Live Save holds no content to archive."
     )
+    return found
+
+
+def redo_lines(plan: redo.Plan) -> list[str]:
+    """The Redo Initialization confirmation: every path and keyring entry, enumerated -
+    and what is never touched, said out loud."""
+    found = ["This will permanently delete:"]
+    found += [f"  - {path}" for path in plan.deletions]
+    found += [f"  - {entry}" for entry in plan.keyring_entries]
+    found += ["", "Never touched: every Backup in backups/, and every Live Save."]
     return found
 
 

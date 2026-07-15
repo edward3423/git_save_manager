@@ -235,7 +235,7 @@ def clone(paths: Paths, repo: str, pat: str, entry_ids: Iterable[str] = ()) -> N
     )
 
     read_marker(paths)  # refuse a repository that is not a Vault, before we write to it
-    set_sparse(paths, entry_ids)
+    set_sparse(paths, entry_ids, pat=pat)
 
 
 def current_branch(paths: Paths) -> str:
@@ -298,14 +298,21 @@ def sparse_directories(entry_ids: Iterable[str]) -> list[str]:
     return ["machines", SIDECAR_PIN, *bound]
 
 
-def set_sparse(paths: Paths, entry_ids: Iterable[str]) -> None:
+def set_sparse(paths: Paths, entry_ids: Iterable[str], pat: str | None = None) -> None:
     """Materialize exactly the bound Entries, and nothing else.
 
     Fully reversible: binding an Entry adds a directory to the cone and Git checks it out;
     unbinding removes it and Git deletes the working-tree copy. The history is untouched
     either way, so nothing is ever lost by narrowing the cone.
+
+    *Widening* the cone in a partial clone checks out blobs the clone never fetched, and
+    Git fetches them lazily right here - so callers that widen pass the PAT, or the lazy
+    fetch dies on GitHub's doorstep asking for a password nothing will type.
     """
-    git(paths).run("sparse-checkout", "set", *sparse_directories(entry_ids))
+    timeout = NETWORK_TIMEOUT if pat is not None else None
+    git(paths).run(
+        "sparse-checkout", "set", *sparse_directories(entry_ids), pat=pat, timeout=timeout
+    )
 
 
 # --- size guards: fail early, not at push time ----------------------------------------------
