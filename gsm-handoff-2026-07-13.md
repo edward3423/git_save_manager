@@ -2,8 +2,8 @@
 
 **Date:** 2026-07-15 (originally 2026-07-13; updated in place)
 **Repo:** `D:\Projects\git_save_manager` (GitHub: `EdwardRusli/git_save_manager`)
-**Branch:** `main` green; `core/github-bootstrap` open as PR #10, CI green, awaiting the user's merge decision
-**State:** Phases 1-3 complete. The entire core - local half and Cloud half - is built. Only `ui/*` remains.
+**Branch:** `main` green, nothing in flight
+**State:** **Every phase of plans/plan.md is built and merged** (PRs #1-#13). What remains is the *manual* half of Section 8: first-run against real GitHub, the GUI walked by a human, and the network-unplug scenarios - things only a person at the machine can verify.
 
 Note the environment: development moved from macOS to **Windows 10** (PowerShell; `D:\` paths). The suite carries 11 platform skips there (symlinks need privileges, chmod does not restrict directories) and the mutation harness skips 4 symlink mutations to match; CI on ubuntu covers all of them.
 
@@ -23,7 +23,7 @@ The code is the other half of the documentation. Module docstrings carry the rea
 
 ## Where the work stands
 
-`main` contains, merged via PRs #1-#9:
+`main` contains, merged via PRs #1-#13:
 
 | Layer | Modules |
 |---|---|
@@ -31,18 +31,19 @@ The code is the other half of the documentation. Module docstrings carry the rea
 | Content | `core/hashing.py` |
 | State | `core/entry_state.py`, `core/ledger.py` |
 | Writes | `core/transaction.py`, `core/backups.py` |
-| Git | `core/git.py`, `core/vault.py` |
-| Verbs | `core/entries.py`, `core/operations.py` |
-| Cloud | `core/cloud.py` - Push, Pull, fetch status, sticky Offline Mode, Entry-granular Merge Conflict resolution |
+| Git | `core/git.py`, `core/vault.py` (incl. published Bindings in machine files) |
+| Verbs | `core/entries.py`, `core/operations.py` (incl. `bind_entry`/`unbind_entry`/`adopt_bindings`) |
+| Cloud | `core/cloud.py` - Push, Pull, fetch status, sticky Offline Mode, Merge Conflict resolution |
+| Bootstrap | `core/github.py` - four bootstrap paths, identity adoption, REST token hygiene |
+| Startup | `core/lock.py` (single instance), `core/startup.py` (recovery, Invariant 2, `App.reset`) |
+| Redo | `core/redo.py` - enumerated wipe, Vault-Ahead refusal, backups and Live Saves untouchable |
+| UI | `main.py`, `ui/main_window.py`, `ui/dialogs.py` (one `PreviewDialog` for every destructive flow), `ui/presenter.py` (all deciding logic, headless-tested), `ui/style.qss` |
 
-**In flight:** PR #10 (`core/github-bootstrap`) adds `core/github.py` - the four bootstrap paths, PAT validated against `/user` before anything is written, default branch taken from the remote HEAD, token in the `Authorization` header only. CI is green. **Do not squash-merge it (or any PR) yourself unless the user says so in the current session.** When it merges, flip its slice-table row to `merged (#10)` in passing.
-
-405 tests pass (`uv run pytest`; 11 skip on Windows), 64 mutations all caught (`uv run python scratch/mutate.py`; 4 skip on Windows), `ruff check` and `ruff format --check` clean.
+437 tests pass (`uv run pytest`; 11 skip on Windows), 76 mutations all caught (`uv run python scratch/mutate.py`; 4 skip on Windows; filter with `mutate.py <substring>` during development), `ruff check` and `ruff format --check` clean.
 
 ## What is left
 
-1. **Merge PR #10** - user's call.
-2. **`ui/*`** - main window, dialogs, offline mode surfacing, Redo Initialization. Phase 4, PyQt6, the last slice. Marked `autonomous` in the table, but note the automated suite deliberately excludes the GUI - verification is the manual checklist in plan Section 8, so actually run the window (`/run`) rather than trusting green tests. `main.py` (entry point, startup recovery, `app.lock` single-instance check, writability check) does not exist yet and belongs to this slice.
+The **manual** checklist in plan Section 8 - real GitHub auth, the four bootstrap paths first-hand, unplugging the network mid-operation, walking every dialog with a picky eye, Redo Initialization end-to-end including identity adoption on the next setup. The automated suite deliberately excludes the GUI and the network, so a human at the machine is the only honest verifier of those. `uv run python main.py` starts the app.
 
 ---
 
@@ -81,8 +82,8 @@ Project conventions: `uv`, `pyproject.toml` (never `requirements.txt`), Python 3
 
 ## Suggested skills
 
-- **`/run`** for `ui/*` - actually launch the PyQt6 window rather than trusting the tests. The user is explicitly picky about UI and expects pixel perfection.
-- **`/tdd`** for whatever headless logic `ui/*` extracts (view-models, preview text, state-to-widget mapping). Keep the Qt layer thin and the logic testable; the pattern held for every core slice.
+- **`/run`** to launch the app (`uv run python main.py`) for the manual Section 8 checklist. The user is explicitly picky about UI and expects pixel perfection; the offscreen-screenshot trick used during development (`WA_DontShowOnScreen` + `grab()`) renders real fonts without flashing a window.
+- **`/tdd`** for any new headless logic. The pattern held for every slice: the deciding half lives in `core/` or `ui/presenter.py` and is tested; the Qt half only renders.
 - **`/code-review`** before opening each PR, to check the diff against the plan rather than against itself.
 - **`/grilling`** if any new design question comes up that the plan does not already answer. The current plan is the output of one of these and is far better for it.
 
