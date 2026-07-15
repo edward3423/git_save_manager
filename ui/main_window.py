@@ -310,7 +310,18 @@ class MainWindow(QMainWindow):
                 self.app.cloud.fetch_status(pat)
             self.fetched.emit()
 
-        threading.Thread(target=work, name="startup-fetch", daemon=True).start()
+        threading.Thread(target=work, name="status-fetch", daemon=True).start()
+
+    def _settled(self) -> None:
+        """Redraw from disk, then refetch the Cloud status the action just moved.
+
+        Every Entry action commits locally, which changes this Machine's ahead/behind count -
+        but the status bar reads a cached CloudStatus that only a fetch recomputes, so without
+        this it would sit stale until the next manual Check. The fetch is async: the window
+        never blocks, and `fetched` carries the second redraw back when it completes.
+        """
+        self.refresh()
+        self._fetch_soon()
 
     # --- operations: one at a time, each re-validated at the moment it runs ----------------
 
@@ -333,7 +344,7 @@ class MainWindow(QMainWindow):
 
     def add_entry(self) -> None:
         if dialogs.AddEntryDialog(self.app, self).exec():
-            self.refresh()
+            self._settled()
 
     def set_up(self) -> None:
         if dialogs.SetupDialog(self.app, self.store, self).exec():
@@ -358,7 +369,7 @@ class MainWindow(QMainWindow):
             )
         except (operations.SyncAborted, operations.NothingToSync) as error:
             log().warning("%s", error)
-        self.refresh()
+        self._settled()
 
     def restore_selected(self) -> None:
         row = self._revalidated(Action.RESTORE_TO_LIVE)
@@ -376,14 +387,14 @@ class MainWindow(QMainWindow):
                 )
             except Exception as error:  # noqa: BLE001 - surfaced, not hidden
                 log().warning("%s", error)
-        self.refresh()
+        self._settled()
 
     def resolve_selected(self) -> None:
         row = self._revalidated(Action.RESOLVE)
         if row is None:
             return
         dialogs.resolve_sync_conflict(self.app, row.entry_id, row.name, self)
-        self.refresh()
+        self._settled()
 
     def bind_selected(self) -> None:
         self.refresh()
@@ -395,7 +406,7 @@ class MainWindow(QMainWindow):
             self.app, row.entry_id, row.name, self, pat=self.store.get_pat()
         )
         if dialog.exec():
-            self.refresh()
+            self._settled()
 
     def unbind_selected(self) -> None:
         self.refresh()
@@ -409,7 +420,7 @@ class MainWindow(QMainWindow):
             self.app.the_ledger,
             row.entry_id,
         )
-        self.refresh()
+        self._settled()
 
     def remove_selected(self) -> None:
         self.refresh()
@@ -433,7 +444,7 @@ class MainWindow(QMainWindow):
                 self.app.the_ledger,
                 row.entry_id,
             )
-        self.refresh()
+        self._settled()
 
     def show_history(self) -> None:
         row = self._selected_row()
