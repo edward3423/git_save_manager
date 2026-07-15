@@ -284,10 +284,10 @@ class Cloud:
         behind, ahead = (int(part) for part in raw.split())
         return ahead, behind
 
-    def fetch_status(self, pat: str) -> CloudStatus:
-        """Fetch, then say where HEAD stands. Observes only: never pulls, never pushes."""
-        self._require_online()
-        self._fetch(pat)
+    def _record_status(self) -> CloudStatus:
+        """Read where HEAD stands against the tracking ref and cache it. Reads only the refs
+        already on disk - no network - so a caller that just moved a ref (a push advancing
+        `origin/<branch>`) gets the new truth, not the pre-operation count."""
         ahead, behind = self._ahead_behind()
 
         if ahead and behind:
@@ -302,6 +302,12 @@ class Cloud:
         status = CloudStatus(state=state, ahead=ahead, behind=behind, checked_at=datetime.now(UTC))
         self.last_status = status
         return status
+
+    def fetch_status(self, pat: str) -> CloudStatus:
+        """Fetch, then say where HEAD stands. Observes only: never pulls, never pushes."""
+        self._require_online()
+        self._fetch(pat)
+        return self._record_status()
 
     def push(self, pat: str) -> None:
         """Publish this Machine's commits to the Cloud Vault. Never forced: the Cloud Vault's
@@ -321,6 +327,10 @@ class Cloud:
                 ) from error
             raise self._lost(error) from error
 
+        # A successful push advanced `origin/<branch>` on disk, so the ahead count is now zero.
+        # Recompute from the moved ref rather than leave the indicator showing the old count.
+        self._record_status()
+
     def pull(self, pat: str, description: MachineDescription) -> Pulled:
         """Bring the Cloud Vault's commits into the Vault, by merge and never by rebase.
 
@@ -338,6 +348,7 @@ class Cloud:
         self._fetch(pat)
         _, behind = self._ahead_behind()
         if behind == 0:
+            self._record_status()  # the fetch may still have changed the ahead count
             return Pulled(commits=0)
 
         # The pat is passed because a partial clone fetches file contents lazily: the merge
@@ -372,6 +383,11 @@ class Cloud:
                     "hand. The merge was aborted; nothing has changed."
                 ) from None
 
+            # Mid-merge, working tree in conflict: the counts are ambiguous and the entry
+            # state surfaces the conflict, so the cached status is deliberately left alone.
             return Pulled(commits=behind, conflicts=_entries_of(unmerged))
 
+        # The merge commit advanced HEAD past `origin/<branch>`: behind is now zero and this
+        # Machine is ahead by the merge, waiting to be pushed. Reflect that, don't leave stale.
+        self._record_status()
         return Pulled(commits=behind)
