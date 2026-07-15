@@ -10,9 +10,14 @@ code could plausibly be wrong - usually a way it *nearly was*. A mutation that S
 claim the test suite does not actually check, and it is worth more attention than a hundred
 passing assertions.
 
-    uv run python scratch/mutate.py
+    uv run python scratch/mutate.py            # the full sweep: the gate before every PR
+    uv run python scratch/mutate.py cloud.py   # only mutations matching a file or phrase
 
-It edits a throwaway copy of the tree under `data/`, never the working tree.
+The filter exists because the full sweep is half an hour and a slice under development only
+needs its own mutations plus any touching the files it changed. The full run is not
+optional at the end: it is the review the autonomous slices get instead of a human.
+
+It edits a throwaway copy of the tree, never the working tree itself.
 """
 
 from __future__ import annotations
@@ -544,7 +549,18 @@ def failures_under(tree: Path) -> list[str]:
     return re.findall(r"^(?:FAILED|ERROR) (\S+)", proc.stdout, re.M)
 
 
-def main() -> int:
+def main(match: str | None = None) -> int:
+    chosen = [
+        mutation
+        for mutation in MUTATIONS
+        if match is None
+        or match.casefold() in mutation.describes.casefold()
+        or match in mutation.file
+    ]
+    if not chosen:
+        print(f"No mutation matches {match!r}.")
+        return 2
+
     survivors = 0
     skipped = 0
 
@@ -556,7 +572,7 @@ def main() -> int:
             ignore=shutil.ignore_patterns(".git", "data", "__pycache__", ".venv", ".pytest_cache"),
         )
 
-        for mutation in MUTATIONS:
+        for mutation in chosen:
             if mutation.requires_symlinks and os.name == "nt":
                 skipped += 1
                 print(f"skipped   {mutation.describes}")
@@ -592,11 +608,14 @@ def main() -> int:
         print(f"{survivors} mutation(s) survived. Each one is a hole in the tests.")
         return 1
 
-    ran = len(MUTATIONS) - skipped
+    ran = len(chosen) - skipped
     trailer = f" ({skipped} skipped on this platform.)" if skipped else ""
-    print(f"All {ran} mutations were caught.{trailer}")
+    scope = f" matching {match!r}" if match else ""
+    print(f"All {ran} mutations{scope} were caught.{trailer}")
+    if match:
+        print("A filtered run is a development aid. The gate before a PR is the full sweep.")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1] if len(sys.argv) > 1 else None))
