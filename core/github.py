@@ -24,6 +24,7 @@ import shutil
 import stat
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -134,6 +135,11 @@ class Bootstrapped:
     outcome: BootstrapOutcome
     branch: str
 
+    adopted: dict[str, Any] | None = None
+    """The old machine file this Machine reclaimed (identity adoption), or None. Its
+    `bindings` are what the caller re-binds locally, so the adopted identity comes back
+    with everything it had published."""
+
 
 def _viewer(api: Api, token: str) -> str:
     """Validate the PAT against `/user` and name its owner. The first call, always."""
@@ -193,6 +199,20 @@ def _complete(paths: Paths, config: Config, repo: str, branch: str) -> None:
     config_module.save(paths, config)
 
 
+def _ghost_of(
+    paths: Paths, config: Config, description: MachineDescription
+) -> dict[str, Any] | None:
+    """A published Machine with this hostname but another identity - almost always this very
+    Machine, before a Redo Initialization wiped its config."""
+    for machine in vault.list_machines(paths):
+        if machine.get("hostname") == description.hostname and machine.get("machine_id") not in (
+            None,
+            config.machine_id,
+        ):
+            return machine
+    return None
+
+
 def bootstrap(
     paths: Paths,
     config: Config,
@@ -200,8 +220,14 @@ def bootstrap(
     api: Api,
     token: str,
     repo: str,
+    adopt: Callable[[dict[str, Any]], bool] | None = None,
 ) -> Bootstrapped:
-    """Set this Machine up against `owner/name`, whatever state that repository is in."""
+    """Set this Machine up against `owner/name`, whatever state that repository is in.
+
+    `adopt` is asked once when the joined Vault already lists a Machine with this hostname
+    under a different identity: answering True reclaims that identity - its UUID and its
+    published Bindings - instead of registering a fresh Machine beside the ghost.
+    """
     login = _viewer(api, token)
 
     found = api.request("GET", f"/repos/{repo}", token)
@@ -235,7 +261,15 @@ def bootstrap(
     except (vault.NotAVault, vault.VaultTooNew):
         _discard_clone(paths)
         raise
-    vault.register_machine(paths, config, description)
+    ghost = _ghost_of(paths, config, description) if adopt is not None else None
+    if ghost is not None and adopt(ghost):
+        config.machine_id = ghost["machine_id"]
+    else:
+        ghost = None
+
+    # An adopted identity keeps its published Bindings - blanking them would tell every
+    # other Machine this one holds nothing, moments before the caller re-binds it all.
+    vault.write_machine_file(paths, config, description, (ghost or {}).get("bindings"))
     repo_git = vault.git(paths)
     repo_git.run("add", "-A")
     # A setup re-run after a reinstall finds its own file already in the Vault, byte for
@@ -250,7 +284,7 @@ def bootstrap(
         )
         repo_git.run("push", "-q", "origin", branch, pat=token, timeout=NETWORK_TIMEOUT)
     _complete(paths, config, repo, branch)
-    return Bootstrapped(outcome=BootstrapOutcome.JOINED, branch=branch)
+    return Bootstrapped(outcome=BootstrapOutcome.JOINED, branch=branch, adopted=ghost)
 
 
 def _discard_clone(paths: Paths) -> None:

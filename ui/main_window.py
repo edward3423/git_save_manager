@@ -102,6 +102,7 @@ class MainWindow(QMainWindow):
         self.setup_button = button("Set Up...", self.set_up)
         self.machines_button = button("Machines", self.show_machines)
         self.log_button = button("Git Log", self.show_git_log)
+        self.redo_button = button("Redo Initialization...", self.redo_initialization)
 
     def _build_body(self) -> None:
         self.sidebar = QListWidget()
@@ -339,6 +340,10 @@ class MainWindow(QMainWindow):
             self.refresh()
             self._fetch_soon()
 
+    def redo_initialization(self) -> None:
+        if dialogs.run_redo(self.app, self.store, self):
+            self.refresh()  # back to the first-run state, in the running window
+
     def sync_selected(self) -> None:
         row = self._revalidated(Action.SYNC_TO_VAULT)
         if row is None:
@@ -385,7 +390,11 @@ class MainWindow(QMainWindow):
         row = self._selected_row()
         if row is None or row.status is not None:
             return
-        if dialogs.BindDialog(self.app, row.entry_id, row.name, self).exec():
+        # Widening the sparse cone may lazily fetch this Entry's blobs from the Cloud.
+        dialog = dialogs.BindDialog(
+            self.app, row.entry_id, row.name, self, pat=self.store.get_pat()
+        )
+        if dialog.exec():
             self.refresh()
 
     def unbind_selected(self) -> None:

@@ -487,6 +487,39 @@ MUTATIONS = [
         "the_ledger.bindings.items()}",
         "    published = {}",
     ),
+    # --- redo: wipe the reconstructible, never the irreplaceable -------------------------------
+    Mutation(
+        "Wipe the whole data directory, taking every Backup with it",
+        "core/redo.py",
+        "    for found in doomed.deletions:",
+        "    shutil.rmtree(paths.data_dir, onexc=_force_writable)\n"
+        "    for found in doomed.deletions:",
+    ),
+    Mutation(
+        "Skip the refusal, eating commits that exist on this Machine and nowhere else",
+        "core/redo.py",
+        "    if ahead and not discard_unpushed:",
+        "    if False:",
+    ),
+    Mutation(
+        "Register a fresh Machine even though the user chose to adopt the old identity",
+        "core/github.py",
+        '        config.machine_id = ghost["machine_id"]',
+        "        config.machine_id = config.machine_id",
+    ),
+    Mutation(
+        "Blank the adopted identity's published Bindings the moment it is reclaimed",
+        "core/github.py",
+        '    vault.write_machine_file(paths, config, description, (ghost or {}).get("bindings"))',
+        "    vault.write_machine_file(paths, config, description)",
+    ),
+    Mutation(
+        "Keep the old Config through a reset, so the wiped identity haunts the window",
+        "core/startup.py",
+        "        self.config = config_module.load(self.paths)\n"
+        "        self.the_ledger = ledger.load(self.paths)",
+        "        self.the_ledger = ledger.load(self.paths)",
+    ),
     # --- startup: the lock, recovery, and Invariant 2 ------------------------------------------
     Mutation(
         "Let a second instance run, so two processes write one Ledger and one Vault",
