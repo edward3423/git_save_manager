@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
@@ -21,6 +22,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -185,6 +187,32 @@ def _pick_directory(parent: QWidget, title: str) -> Path | None:
     return Path(found) if found else None
 
 
+def _pick_file(parent: QWidget, title: str) -> Path | None:
+    found, _ = QFileDialog.getOpenFileName(parent, title)
+    return Path(found) if found else None
+
+
+def _browse_button(parent: QWidget, target: QLineEdit, title: str) -> QPushButton:
+    """A Browse button that points `target` at a folder *or* a single file.
+
+    A save is sometimes a directory and sometimes one file (a lone `.md`, an `.sav`), and the
+    whole add/bind path downstream treats either the same. The native directory picker refuses
+    files outright, so the choice is offered explicitly rather than guessed.
+    """
+    button = QPushButton("Browse...")
+    menu = QMenu(button)
+
+    def fill(picker: Callable[[QWidget, str], Path | None]) -> None:
+        found = picker(parent, title)
+        if found is not None:
+            target.setText(str(found))
+
+    menu.addAction("Folder...", lambda: fill(_pick_directory))
+    menu.addAction("File...", lambda: fill(_pick_file))
+    button.setMenu(menu)
+    return button
+
+
 class AddEntryDialog(QDialog):
     """Name a save and point at where it lives on this Machine."""
 
@@ -197,8 +225,7 @@ class AddEntryDialog(QDialog):
         self.name_edit.setPlaceholderText("Elden Ring")
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("the folder (or file) the game writes")
-        browse = QPushButton("Browse...")
-        browse.clicked.connect(self._browse)
+        browse = _browse_button(self, self.path_edit, "Where does the game keep this save?")
 
         path_row = QHBoxLayout()
         path_row.addWidget(self.path_edit)
@@ -217,11 +244,6 @@ class AddEntryDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(buttons)
-
-    def _browse(self) -> None:
-        found = _pick_directory(self, "Where does the game keep this save?")
-        if found is not None:
-            self.path_edit.setText(str(found))
 
     def run_add(self) -> None:
         name = self.name_edit.text().strip()
@@ -272,8 +294,7 @@ class BindDialog(QDialog):
 
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("where this Machine keeps (or will keep) the save")
-        browse = QPushButton("Browse...")
-        browse.clicked.connect(self._browse)
+        browse = _browse_button(self, self.path_edit, "Where does this Machine keep the save?")
 
         path_row = QHBoxLayout()
         path_row.addWidget(self.path_edit)
@@ -289,11 +310,6 @@ class BindDialog(QDialog):
         layout.addWidget(hint_label)
         layout.addLayout(path_row)
         layout.addWidget(buttons)
-
-    def _browse(self) -> None:
-        found = _pick_directory(self, "Where does this Machine keep the save?")
-        if found is not None:
-            self.path_edit.setText(str(found))
 
     def run_bind(self) -> None:
         raw = self.path_edit.text().strip()
