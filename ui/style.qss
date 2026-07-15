@@ -65,6 +65,25 @@ QLabel#detailState {
     font-weight: 600;
 }
 
+QPlainTextEdit {
+    background: #26282c;
+    color: #d6d8dc;
+    border: 1px solid #3a3d42;
+    border-radius: 4px;
+}
+
+QLineEdit {
+    background: #33363b;
+    color: #d6d8dc;
+    border: 1px solid #3a3d42;
+    border-radius: 4px;
+    padding: 4px 6px;
+}
+
+QLineEdit:focus {
+    border-color: #4f8cc9;
+}
+
 QPlainTextEdit#console {
     background: #16171a;
     color: #a8adb7;

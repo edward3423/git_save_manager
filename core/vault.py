@@ -143,14 +143,32 @@ def read_marker(paths: Paths) -> Marker:
     return Marker(schema=schema)
 
 
-def machine_file_contents(config: Config, description: MachineDescription) -> dict[str, Any]:
-    """This Machine's published file. Exactly one writer, so it can never conflict (ADR-0003)."""
+def machine_file_contents(
+    config: Config,
+    description: MachineDescription,
+    bindings: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """This Machine's published file. Exactly one writer, so it can never conflict (ADR-0003).
+
+    `bindings` (entry id -> live path) is what lets another Machine's Bind dialog say "the
+    laptop keeps this save at ..." as a read-only hint. Paths on someone else's disk are
+    never acted on, only shown.
+    """
     return {
         "schema": SCHEMA,
         "machine_id": config.machine_id,
         "hostname": description.hostname,
         "os": description.os_name,
+        "bindings": bindings or {},
     }
+
+
+def list_machines(paths: Paths) -> list[dict[str, Any]]:
+    """Every Machine that has published itself, for the Machines view and the Bind hints."""
+    if not paths.machines_dir.is_dir():
+        return []
+    found = [read_json(file) for file in sorted(paths.machines_dir.glob("*.json"))]
+    return [machine for machine in found if machine]
 
 
 def init_structure(paths: Paths, config: Config, description: MachineDescription) -> None:
@@ -160,9 +178,21 @@ def init_structure(paths: Paths, config: Config, description: MachineDescription
     write_json(paths.machine_file(config.machine_id), machine_file_contents(config, description))
 
 
+def write_machine_file(
+    paths: Paths,
+    config: Config,
+    description: MachineDescription,
+    bindings: dict[str, str] | None = None,
+) -> None:
+    write_json(
+        paths.machine_file(config.machine_id),
+        machine_file_contents(config, description, bindings),
+    )
+
+
 def register_machine(paths: Paths, config: Config, description: MachineDescription) -> None:
     """Publish this Machine into the Vault. The second-machine path. Does not commit."""
-    write_json(paths.machine_file(config.machine_id), machine_file_contents(config, description))
+    write_machine_file(paths, config, description)
 
 
 # --- bringing a Vault into being --------------------------------------------------------------
