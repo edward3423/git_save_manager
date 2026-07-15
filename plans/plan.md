@@ -229,7 +229,7 @@ Considered and deliberately rejected. Recorded so they are not re-litigated.
 | `core/vault-ops` - Sync-as-one-commit, stable-read guard, history, rollback | merged (#7) | **human reads the diff** |
 | `core/cloud` - Pull/Push, fetch status, Offline Mode, Merge Conflict resolution | merged (#9) | autonomous |
 | `core/github-bootstrap` - four bootstrap paths, `vault.json` marker, PAT hygiene | merged (#10) | autonomous |
-| `ui/foundation` - `app.lock`, startup sequence, main window shell, presenter | open (#11) | autonomous |
+| `ui/foundation` - `app.lock`, startup sequence, main window shell, presenter | merged (#11) | autonomous |
 | `ui/dialogs` - setup, Add/Bind, previews, Conflict, History, Backups, Machines | | autonomous |
 | `ui/redo-init` - Redo Initialization, refusals and enumeration | | autonomous |
 
