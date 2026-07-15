@@ -476,6 +476,43 @@ MUTATIONS = [
         "headers=headers\n"
         "    )",
     ),
+    # --- startup: the lock, recovery, and Invariant 2 ------------------------------------------
+    Mutation(
+        "Let a second instance run, so two processes write one Ledger and one Vault",
+        "core/lock.py",
+        "    holder = _holder(path)\n    if holder is not None and _alive(holder):",
+        "    holder = _holder(path)\n    if False:",
+    ),
+    Mutation(
+        "Treat a dead process as alive, wedging the app behind a crashed run's lock forever",
+        "core/lock.py",
+        "    except OSError:\n        return False",
+        "    except OSError:\n        return True",
+    ),
+    Mutation(
+        "Skip crash recovery at startup, leaving a torn Live Save exactly as the crash left it",
+        "core/startup.py",
+        "        recovered = transaction.recover(paths)",
+        "        recovered = None",
+    ),
+    Mutation(
+        "Skip Invariant 2 at startup, so the first status refresh reads a crash's wreckage",
+        "core/startup.py",
+        '        if (paths.vault_dir / ".git").exists():',
+        "        if False:",
+    ),
+    Mutation(
+        "Keep the lock when startup fails, so the fixed next attempt is refused as a duplicate",
+        "core/startup.py",
+        "        held.release()\n        raise",
+        "        raise",
+    ),
+    Mutation(
+        "Erase the last known Cloud state the moment the app goes offline",
+        "ui/presenter.py",
+        "        if last is not None:",
+        "        if False:",
+    ),
 ]
 
 
