@@ -1,4 +1,4 @@
-﻿# Implementation Plan: Git-Backed Save File Manager
+# Implementation Plan: Git-Backed Save File Manager
 
 A PyQt6 desktop app that manages game saves and application settings by versioning them in a Git repository backed by a private GitHub remote, so the same files can be carried between machines with history and rollback.
 
@@ -25,43 +25,43 @@ These hold everywhere. They are the reason the design is safe, and no feature ma
 
 ```text
 git_save_manager/
-â”œâ”€â”€ main.py                     # Entry point
-â”œâ”€â”€ pyproject.toml              # uv-managed deps; requires-python >=3.12
-â”œâ”€â”€ .gitignore                  # one line: /data/
-â”œâ”€â”€ CONTEXT.md                  # domain glossary
-â”œâ”€â”€ docs/adr/                   # architecture decisions
-â”œâ”€â”€ plans/plan.md               # this file
-â”‚
-â”œâ”€â”€ core/
-â”‚   â”œâ”€â”€ config.py               # config.json + OS keyring (PAT)
-â”‚   â”œâ”€â”€ ledger.py               # Bindings + Baselines (per-Machine, never committed)
-â”‚   â”œâ”€â”€ hashing.py              # SHA-256 file and directory content hashes
-â”‚   â”œâ”€â”€ entry_state.py          # the four-state machine
-â”‚   â”œâ”€â”€ vault.py                # Git operations, Cloud status, partial clone/sparse set
-â”‚   â”œâ”€â”€ transaction.py          # journaled Live-Save writes, backups, startup recovery
-â”‚   â”œâ”€â”€ github.py               # repo creation/validation via REST
-â”‚   â””â”€â”€ logger.py               # logging -> GUI console via Qt signal
-â”‚
-â”œâ”€â”€ ui/
-â”‚   â”œâ”€â”€ main_window.py
-â”‚   â”œâ”€â”€ dialogs.py
-â”‚   â””â”€â”€ style.qss
-â”‚
-â”œâ”€â”€ scratch/tests/              # automated tests (headless: no GUI, no network)
-â”‚
-â””â”€â”€ data/                       # ALL runtime state. Gitignored. Never committed.
-    â”œâ”€â”€ config.json             # machine id (UUID), repo, default branch
-    â”œâ”€â”€ ledger.json             # Bindings + Baselines for this Machine
-    â”œâ”€â”€ journal.json            # active Live-Save transaction
-    â”œâ”€â”€ app.lock                # single-instance PID lock
-    â”œâ”€â”€ backups/                # restore-safety zips
-    â””â”€â”€ vault/                  # the Git repo. Committed content ONLY.
-        â”œâ”€â”€ vault.json          # {"vault": true, "schema": 1, ...}
-        â”œâ”€â”€ machines/
-        â”‚   â””â”€â”€ <machine-uuid>.json     # ONLY its owner writes this
-        â””â”€â”€ entries/
-            â”œâ”€â”€ <entry-uuid>/           # content: byte-for-byte the Live Save
-            â””â”€â”€ <entry-uuid>.json       # sidecar: display name, kind, created_by
+├── main.py                     # Entry point
+├── pyproject.toml              # uv-managed deps; requires-python >=3.12
+├── .gitignore                  # one line: /data/
+├── CONTEXT.md                  # domain glossary
+├── docs/adr/                   # architecture decisions
+├── plans/plan.md               # this file
+│
+├── core/
+│   ├── config.py               # config.json + OS keyring (PAT)
+│   ├── ledger.py               # Bindings + Baselines (per-Machine, never committed)
+│   ├── hashing.py              # SHA-256 file and directory content hashes
+│   ├── entry_state.py          # the four-state machine
+│   ├── vault.py                # Git operations, Cloud status, partial clone/sparse set
+│   ├── transaction.py          # journaled Live-Save writes, backups, startup recovery
+│   ├── github.py               # repo creation/validation via REST
+│   └── logger.py               # logging -> GUI console via Qt signal
+│
+├── ui/
+│   ├── main_window.py
+│   ├── dialogs.py
+│   └── style.qss
+│
+├── scratch/tests/              # automated tests (headless: no GUI, no network)
+│
+└── data/                       # ALL runtime state. Gitignored. Never committed.
+    ├── config.json             # machine id (UUID), repo, default branch
+    ├── ledger.json             # Bindings + Baselines for this Machine
+    ├── journal.json            # active Live-Save transaction
+    ├── app.lock                # single-instance PID lock
+    ├── backups/                # restore-safety zips
+    └── vault/                  # the Git repo. Committed content ONLY.
+        ├── vault.json          # {"vault": true, "schema": 1, ...}
+        ├── machines/
+        │   └── <machine-uuid>.json     # ONLY its owner writes this
+        └── entries/
+            ├── <entry-uuid>/           # content: byte-for-byte the Live Save
+            └── <entry-uuid>.json       # sidecar: display name, kind, created_by
 ```
 
 The app must live somewhere writable. **Check at startup and refuse to run otherwise**, with a clear message - failing at the start of an operation is safe; failing in the middle is what the journal exists for.
@@ -129,10 +129,10 @@ Only the *equality pattern* of (Live, Vault, Baseline) matters, so the state spa
 ### Phase 2: Safety - Live Save writes
 
 1. **`transaction.py`**
-   - **Transactional write.** Stage as a **sibling of the destination** (same directory â‡’ same volume). Atomic rename holds only within one filesystem; across volumes `os.rename`/`os.replace` raise `EXDEV` and `shutil.move` silently degrades to a non-atomic copy-then-delete. `flush()` + `os.fsync()` before the swap. Swap files with `os.replace()` (atomic same-volume; unlike `os.rename`, overwrites on Windows). Directories use the two-step swap (`dest`â†’`dest.old`, `dest.tmp`â†’`dest`, delete `dest.old`), journaling each step.
-   - **Backups.** Zip the Live Save immediately before *any* write to it, and only then - Vaultâ†’Live restore, conflict resolution toward the Vault, Backup restore. A Sync *to* the Vault writes nothing Live and needs none. Skip the write and the zip entirely if the Live content already equals what we would write. Retention: keep the most recent **10 per Entry**, configurable, pruning oldest first and **only after a successful operation**.
+   - **Transactional write.** Stage as a **sibling of the destination** (same directory ⇒ same volume). Atomic rename holds only within one filesystem; across volumes `os.rename`/`os.replace` raise `EXDEV` and `shutil.move` silently degrades to a non-atomic copy-then-delete. `flush()` + `os.fsync()` before the swap. Swap files with `os.replace()` (atomic same-volume; unlike `os.rename`, overwrites on Windows). Directories use the two-step swap (`dest`→`dest.old`, `dest.tmp`→`dest`, delete `dest.old`), journaling each step.
+   - **Backups.** Zip the Live Save immediately before *any* write to it, and only then - Vault→Live restore, conflict resolution toward the Vault, Backup restore. A Sync *to* the Vault writes nothing Live and needs none. Skip the write and the zip entirely if the Live content already equals what we would write. Retention: keep the most recent **10 per Entry**, configurable, pruning oldest first and **only after a successful operation**.
    - **Backup restore is first class.** A per-Entry Backups view (timestamp, size, causing operation) with one-click restore through this same preview/backup/journal path, plus "Reveal in Finder" so the raw zip is reachable even if the app is broken. For Live progress overwritten before it was ever Synced, **the zip is the only copy in existence** - it cannot be a folder you are expected to unzip by hand.
-   - **Journal + startup recovery** ([ADR-0005](../docs/adr/0005-git-journals-the-vault-we-journal-only-live-writes.md)). Journal *only* Live-Save writes: Entry, live path, backup location, stage (`backed_up` â†’ `staged` â†’ `swapped` â†’ `done`). On startup: complete or roll back. The Vault needs no journal - assert Invariant 2 instead (`git merge --abort` if mid-merge, else `git reset --hard && git clean -fd`; **never `-x`**).
+   - **Journal + startup recovery** ([ADR-0005](../docs/adr/0005-git-journals-the-vault-we-journal-only-live-writes.md)). Journal *only* Live-Save writes: Entry, live path, backup location, stage (`backed_up` → `staged` → `swapped` → `done`). On startup: complete or roll back. The Vault needs no journal - assert Invariant 2 instead (`git merge --abort` if mid-merge, else `git reset --hard && git clean -fd`; **never `-x`**).
 2. **`entry_state.py`** - the state machine above.
 3. **`ledger.py`** - `data/ledger.json`: per bound Entry, its Binding (live path) and Baseline (content hash), plus last-sync time and direction for the UI.
 4. **`app.lock`** - single-instance PID lock. Two instances running Git against one Vault and both writing the Ledger corrupts state; a lost Baseline means a wrong direction recommendation. Second instance refuses to start; a stale lock (dead PID) can be taken over.
@@ -141,7 +141,7 @@ Only the *equality pattern* of (Live, Vault, Baseline) matters, so the state spa
 
 1. **`vault.py`**
    - **Clone**: `--filter=blob:none` + `sparse-checkout` driven by the bound-Entry set ([ADR-0002](../docs/adr/0002-selective-sync-partial-clone.md)). `vault.json`, `machines/`, and all Entry sidecars are pinned into the sparse set unconditionally.
-   - **Sync (Live â†’ Vault)** is atomically **one commit, one Entry**, with a **stable-read guard**:
+   - **Sync (Live → Vault)** is atomically **one commit, one Entry**, with a **stable-read guard**:
      ```
      H1 = hash(Live)                    # already computed for status
      copy Live -> Vault working tree
@@ -158,7 +158,7 @@ Only the *equality pattern* of (Live, Vault, Baseline) matters, so the state spa
    - **Pull merges; it never rebases.** Thanks to Invariant 4, Entries no other Machine touched merge silently and automatically. Rebase would rewrite hashes and replay the same conflict once per commit for zero benefit on binary content. Contested Entries map back to Entry-granular choices, applied by taking one side's tree wholesale.
    - **History**: `git log -- entries/<entry-uuid>/`. **Not `--follow`** - it "works only for a single file" per `git log --help`, and an Entry is usually a directory. No rename-following is needed: identity is a UUID, so paths never move.
    - **Rollback**: Vault-only forward commit (`rollback(<Display Name>): to <hash> from <machine>`). It naturally lands the Entry in **Vault Ahead**, and restoring to Live is then the ordinary restore path - so exactly one piece of code in this application ever overwrites a Live Save. Rolling back with unsynced local changes correctly lands in **Conflict**; no special case, nothing at risk.
-   - **Size guards** - fail early, not at push time. At Add Entry, refuse/warn above **~90 MB for any single file** (GitHub hard-rejects >100 MB, and discovering that at push leaves a wedged repo). Show Entry size in the details panel and total Vault size in the status area; warn once past a configurable threshold (default 1 GB). Git cannot delta compressed binaries, so the Cloud Vault grows by roughly *(save size) Ã— (number of Syncs)*. The main defense is already free: **the Baseline means we only commit when content actually changed.** Git LFS and history rewriting are **explicitly deferred** - the Vault is an ordinary Git repo, so `git filter-repo` plus a re-clone remains the escape hatch if the wall is ever hit.
+   - **Size guards** - fail early, not at push time. At Add Entry, refuse/warn above **~90 MB for any single file** (GitHub hard-rejects >100 MB, and discovering that at push leaves a wedged repo). Show Entry size in the details panel and total Vault size in the status area; warn once past a configurable threshold (default 1 GB). Git cannot delta compressed binaries, so the Cloud Vault grows by roughly *(save size) × (number of Syncs)*. The main defense is already free: **the Baseline means we only commit when content actually changed.** Git LFS and history rewriting are **explicitly deferred** - the Vault is an ordinary Git repo, so `git filter-repo` plus a re-clone remains the escape hatch if the wall is ever hit.
 2. **`github.py`** - four bootstrap paths, all distinguished:
    | Situation | Behaviour |
    |---|---|
@@ -173,7 +173,7 @@ Only the *equality pattern* of (Live, Vault, Baseline) matters, so the state spa
 
 ### Phase 4: GUI
 
-1. **`dialogs.py`** - Setup (four bootstrap paths; hostname-match offers **Machine identity adoption** after a Redo Initialization, reclaiming the UUID and published Bindings rather than leaving a ghost); Add Entry; **Bind** (Unlinked â†’ bound, showing other Machines' paths as read-only hints); **Direction choice** on first bind onto a non-empty live path *whose content differs*; Conflict (two buttons, Entry-granular); Pull/Push preview; History & Rollback; Backups; Machines; Full Git Log.
+1. **`dialogs.py`** - Setup (four bootstrap paths; hostname-match offers **Machine identity adoption** after a Redo Initialization, reclaiming the UUID and published Bindings rather than leaving a ghost); Add Entry; **Bind** (Unlinked → bound, showing other Machines' paths as read-only hints); **Direction choice** on first bind onto a non-empty live path *whose content differs*; Conflict (two buttons, Entry-granular); Pull/Push preview; History & Rollback; Backups; Machines; Full Git Log.
    - Every destructive dialog renders the **operation preview** (Invariant 7). One preview component, used everywhere.
 2. **`main_window.py`** - sidebar, details panel, toolbar, log console, dark QSS.
    - **Unlinked Entries are visible but unsyncable** - hiding them would conceal that Vault data exists.
