@@ -1,0 +1,96 @@
+/* Dark theme. One palette, stated once:
+   background #1e1f22, panels #26282c, borders #3a3d42, text #d6d8dc, dim text #8b8f98,
+   accent #4f8cc9. */
+
+QMainWindow, QWidget {
+    background: #1e1f22;
+    color: #d6d8dc;
+    font-size: 13px;
+}
+
+QToolBar {
+    background: #26282c;
+    border: none;
+    border-bottom: 1px solid #3a3d42;
+    padding: 6px;
+    spacing: 6px;
+}
+
+QPushButton {
+    background: #33363b;
+    border: 1px solid #3a3d42;
+    border-radius: 4px;
+    padding: 5px 14px;
+}
+
+QPushButton:hover {
+    background: #3d4046;
+}
+
+QPushButton:pressed {
+    background: #2c2e33;
+}
+
+QPushButton:disabled {
+    background: #26282c;
+    color: #8b8f98;
+    border-color: #2f3136;
+}
+
+QListWidget {
+    background: #26282c;
+    border: 1px solid #3a3d42;
+    border-radius: 4px;
+    padding: 4px;
+}
+
+QListWidget::item {
+    padding: 7px 8px;
+    border-radius: 3px;
+}
+
+QListWidget::item:selected {
+    background: #4f8cc9;
+    color: #ffffff;
+}
+
+QLabel#detailName {
+    font-size: 18px;
+    font-weight: 600;
+    padding-top: 2px;
+}
+
+QLabel#detailState {
+    color: #4f8cc9;
+    font-weight: 600;
+}
+
+QPlainTextEdit#console {
+    background: #16171a;
+    color: #a8adb7;
+    border: 1px solid #3a3d42;
+    border-radius: 4px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 12px;
+}
+
+QStatusBar {
+    background: #26282c;
+    border-top: 1px solid #3a3d42;
+    color: #8b8f98;
+}
+
+QStatusBar QLabel {
+    color: #8b8f98;
+    padding: 2px 10px;
+}
+
+QSplitter::handle {
+    background: #1e1f22;
+}
+
+QToolTip {
+    background: #33363b;
+    color: #d6d8dc;
+    border: 1px solid #3a3d42;
+}
