@@ -428,6 +428,54 @@ MUTATIONS = [
         "    unresolved = conflicted_entries(paths)\n    if unresolved:",
         "    unresolved = conflicted_entries(paths)\n    if False:",
     ),
+    # --- github: the four bootstrap paths, and the token in transit ---------------------------
+    Mutation(
+        "Create the repository public, publishing every save to the whole internet",
+        "core/github.py",
+        '        body = {"name": name, "private": True, "auto_init": False}',
+        '        body = {"name": name, "private": False, "auto_init": False}',
+    ),
+    Mutation(
+        "Accept whatever token the user typed, discovering it was bad only mid-setup",
+        "core/github.py",
+        '    answer = api.request("GET", "/user", token)\n    if answer.status != 200:',
+        '    answer = api.request("GET", "/user", token)\n    if False:',
+    ),
+    Mutation(
+        "Leave the refused clone behind, wedging every later attempt to set up correctly",
+        "core/github.py",
+        "    except (vault.NotAVault, vault.VaultTooNew):\n        _discard_clone(paths)\n"
+        "        raise",
+        "    except (vault.NotAVault, vault.VaultTooNew):\n        raise",
+    ),
+    Mutation(
+        "Assume the default branch is called main instead of asking the remote HEAD",
+        "core/github.py",
+        '            return line.split()[1].removeprefix("refs/heads/")',
+        '            return "main"',
+    ),
+    Mutation(
+        "Assume main for an empty repository instead of asking GitHub what it will call it",
+        "core/github.py",
+        '        branch = found.data["default_branch"]',
+        '        branch = "main"',
+    ),
+    Mutation(
+        "Create every repository under the user, whatever organization they actually named",
+        "core/github.py",
+        '        endpoint = "/user/repos" if owner == login else f"/orgs/{owner}/repos"',
+        '        endpoint = "/user/repos"',
+    ),
+    Mutation(
+        "Put the token in the URL, where every proxy log and traceback can read it",
+        "core/github.py",
+        "    return urllib.request.Request(API_ROOT + path, data=data, method=method, "
+        "headers=headers)",
+        "    return urllib.request.Request(\n"
+        '        API_ROOT + path + f"?access_token={token}", data=data, method=method, '
+        "headers=headers\n"
+        "    )",
+    ),
 ]
 
 
