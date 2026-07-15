@@ -28,10 +28,15 @@ def main() -> int:
         QMessageBox.critical(None, "Git Save Manager", str(refusal))
         return 1
 
+    from PyQt6.QtCore import QTimer
+
     from ui.main_window import MainWindow
 
     window = MainWindow(app, fanout)
     window.show()
+    if not app.config.is_set_up:
+        # First run: open setup by itself, rather than leaving the user to find the button.
+        QTimer.singleShot(0, window.set_up)
     try:
         return qt.exec()
     finally:

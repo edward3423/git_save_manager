@@ -339,11 +339,10 @@ MUTATIONS = [
         "Delete the Live Save when the Entry is removed from the Vault",
         "core/operations.py",
         "    the_ledger.unbind(entry_id)\n    ledger.save(paths, the_ledger)\n"
-        "    vault.set_sparse(paths, the_ledger.bindings)\n\n"
-        '    log().info("Removed %s from the Vault. No Live Save was touched.", entry.name)',
+        "    _publish_bindings(paths, config, description, the_ledger)",
         "    shutil.rmtree(the_ledger.require(entry_id).live, ignore_errors=True)\n"
         "    the_ledger.unbind(entry_id)\n    ledger.save(paths, the_ledger)\n"
-        "    vault.set_sparse(paths, the_ledger.bindings)",
+        "    _publish_bindings(paths, config, description, the_ledger)",
     ),
     # --- cloud: Pull, Push, Offline Mode, and who may write a Baseline ------------------------
     Mutation(
@@ -480,6 +479,13 @@ MUTATIONS = [
         '        API_ROOT + path + f"?access_token={token}", data=data, method=method, '
         "headers=headers\n"
         "    )",
+    ),
+    Mutation(
+        "Publish an empty Binding list, blinding every other Machine's Bind hints",
+        "core/operations.py",
+        "    published = {entry_id: binding.live_path for entry_id, binding in "
+        "the_ledger.bindings.items()}",
+        "    published = {}",
     ),
     # --- startup: the lock, recovery, and Invariant 2 ------------------------------------------
     Mutation(

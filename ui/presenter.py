@@ -10,11 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from core import entries, ledger
+from core import entries, ledger, vault
 from core.cloud import Cloud, CloudState
+from core.config import Config
 from core.entry_state import EntryState, EntryStatus
 from core.ledger import Ledger
 from core.paths import Paths
+from core.transaction import Change, Preview
 
 STATE_CAPTIONS = {
     EntryState.IN_SYNC: "In Sync",
@@ -104,3 +106,68 @@ STATE_WORDS = {
     CloudState.BEHIND: "Behind",
     CloudState.DIVERGED: "Diverged",
 }
+
+
+# --- the preview, rendered (Invariant 7) --------------------------------------------------------
+
+
+def size_text(size_bytes: int) -> str:
+    """`2.0 KB`, for a human weighing an operation, not a disk."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    for unit in ("KB", "MB", "GB", "TB"):
+        size_bytes /= 1024
+        if size_bytes < 1024 or unit == "TB":
+            return f"{size_bytes:.1f} {unit}"
+    raise AssertionError("unreachable")
+
+
+CHANGE_WORDS = {
+    Change.ADD: "+ add      ",
+    Change.REPLACE: "~ overwrite",
+    Change.REMOVE: "- delete   ",
+}
+
+
+def preview_lines(preview: Preview) -> list[str]:
+    """Every path a write would touch, and where the Backup lands - Invariant 7, as text.
+
+    One renderer for every destructive dialog: Restore, conflict resolution toward the
+    Vault, and Backup restore all show exactly this.
+    """
+    if preview.is_noop:
+        return [
+            f"{preview.live_path} already holds exactly this content.",
+            "Nothing will be written, and no Backup is needed.",
+        ]
+
+    found = [f"This will write to {preview.live_path}:"]
+    found += [
+        f"  {CHANGE_WORDS[change.change]}  {change.path}  ({size_text(change.size_bytes)})"
+        for change in preview.changes
+    ]
+    found.append("")
+    found.append(
+        "The current Live Save is archived to a Backup first."
+        if preview.will_back_up
+        else "No Backup is taken: the Live Save holds no content to archive."
+    )
+    return found
+
+
+def bind_hints(paths: Paths, config: Config, entry_id: str) -> list[str]:
+    """Where the *other* Machines keep this save - read-only, never acted on.
+
+    Shown in the Bind dialog so the user on a second Machine can see 'the laptop keeps this
+    at C:\\...' while choosing a folder here. This Machine's own Binding is not a hint.
+    """
+    found = []
+    for machine in vault.list_machines(paths):
+        if machine.get("machine_id") == config.machine_id:
+            continue
+        published = machine.get("bindings", {})
+        if entry_id in published:
+            found.append(
+                f"{machine.get('hostname', '?')} ({machine.get('os', '?')}): {published[entry_id]}"
+            )
+    return found
