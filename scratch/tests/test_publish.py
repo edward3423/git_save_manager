@@ -89,6 +89,25 @@ def test_unbinding_never_writes_a_baseline_into_the_next_bind(machine):
     assert the_ledger.require(entry.entry_id).baseline is None
 
 
+def test_adopting_published_bindings_rebinds_without_inventing_baselines(machine):
+    """After identity adoption the Ledger is rebuilt from the published file. No Baseline
+    comes back with it: the Ledger was wiped, so no Sync since then can be claimed."""
+    paths, config, description = machine
+    the_ledger = Ledger()
+    live = paths.root / "live" / "Elden Ring"
+    live.mkdir(parents=True)
+    (live / "slot1.sav").write_text("progress", encoding="utf-8")
+    entry = operations.add_entry(paths, config, description, the_ledger, "Elden Ring", live)
+    operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
+
+    fresh = Ledger()  # the Ledger a Redo Initialization left behind: nothing
+    operations.adopt_bindings(paths, fresh, {entry.entry_id: str(live)})
+
+    binding = fresh.require(entry.entry_id)
+    assert binding.live == live
+    assert binding.baseline is None
+
+
 def test_another_machines_published_binding_is_readable_as_a_hint(machine):
     """What the Bind dialog shows: 'the laptop keeps this save at ...' - read-only."""
     paths, config, description = machine

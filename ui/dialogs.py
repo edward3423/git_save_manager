@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core import backups, cloud, github, operations, vault
+from core import backups, cloud, github, operations, redo, vault
 from core.backups import Backup
 from core.cloud import Side
 from core.credentials import CredentialStore
@@ -132,6 +132,7 @@ class SetupDialog(QDialog):
                 api=github.RestApi(),
                 token=token,
                 repo=repo,
+                adopt=self._offer_adoption,
             )
         except (
             github.BadToken,
@@ -146,6 +147,13 @@ class SetupDialog(QDialog):
             return
 
         self.store.set_pat(token)
+        if done.adopted is not None:
+            operations.adopt_bindings(
+                self.app.paths,
+                self.app.the_ledger,
+                done.adopted.get("bindings", {}),
+                pat=token,
+            )
         outcome = {
             github.BootstrapOutcome.CREATED: "Created a new private Cloud Vault.",
             github.BootstrapOutcome.ADOPTED_EMPTY: "Adopted the empty repository as the Vault.",
@@ -153,6 +161,20 @@ class SetupDialog(QDialog):
         }[done.outcome]
         log().info("%s (branch: %s)", outcome, done.branch)
         self.accept()
+
+    def _offer_adoption(self, ghost: dict) -> bool:
+        """The Vault already lists a Machine with this hostname - almost always this very
+        Machine, before a Redo Initialization. Reclaiming it avoids leaving a ghost."""
+        bound = len(ghost.get("bindings", {}))
+        answer = QMessageBox.question(
+            self,
+            "Adopt the old identity?",
+            f"This Vault already lists a Machine named {ghost.get('hostname')} with {bound} "
+            "published Binding(s). It is probably this Machine, before a Redo "
+            "Initialization.\n\nReclaim that identity and its Bindings, instead of "
+            "registering a new Machine beside it?",
+        )
+        return answer is QMessageBox.StandardButton.Yes
 
 
 # --- adding and binding -------------------------------------------------------------------------
@@ -225,10 +247,18 @@ class AddEntryDialog(QDialog):
 class BindDialog(QDialog):
     """Bind an Unlinked Entry here, with the other Machines' paths as read-only hints."""
 
-    def __init__(self, app: App, entry_id: str, name: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        app: App,
+        entry_id: str,
+        name: str,
+        parent: QWidget | None = None,
+        pat: str | None = None,
+    ) -> None:
         super().__init__(parent)
         self.app = app
         self.entry_id = entry_id
+        self.pat = pat
         self.setWindowTitle(f"Bind {name}")
         self.setMinimumWidth(520)
 
@@ -278,6 +308,7 @@ class BindDialog(QDialog):
                 self.app.the_ledger,
                 self.entry_id,
                 Path(raw),
+                pat=self.pat,
             )
         except OSError as error:
             _fail(self, "Bind", error)
@@ -361,6 +392,49 @@ def resolve_merge_conflicts(app: App, conflicts: tuple[str, ...], parent: QWidge
         log().info("Merge finished. Contested Entries now read Vault Ahead or In Sync.")
     except cloud.MergeUnfinished as error:
         _fail(parent, "Merge", error)
+
+
+# --- Redo Initialization ------------------------------------------------------------------------
+
+
+def run_redo(app: App, store: CredentialStore, parent: QWidget) -> bool:
+    """The most destructive button in the app, and therefore the most explicit.
+
+    The confirmation enumerates every path and keyring entry it will delete. A Vault that
+    is Ahead of the Cloud refuses outright, and discarding those commits - the only place
+    in the design where committed content can vanish - is a second, separate choice.
+    """
+    the_plan = redo.plan(app.paths)
+
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle("Redo Initialization")
+    box.setText("\n".join(presenter.redo_lines(the_plan)))
+    wipe = box.addButton("Delete and start over", QMessageBox.ButtonRole.DestructiveRole)
+    box.addButton(QMessageBox.StandardButton.Cancel)
+    box.exec()
+    if box.clickedButton() is not wipe:
+        return False
+
+    try:
+        redo.execute(app.paths, store)
+    except redo.VaultAhead as refusal:
+        second = QMessageBox(parent)
+        second.setIcon(QMessageBox.Icon.Critical)
+        second.setWindowTitle("Unpushed commits")
+        second.setText(
+            f"{refusal}\n\nDiscarding destroys them permanently - they exist nowhere else."
+        )
+        discard = second.addButton("Discard the commits", QMessageBox.ButtonRole.DestructiveRole)
+        second.addButton(QMessageBox.StandardButton.Cancel)
+        second.exec()
+        if second.clickedButton() is not discard:
+            log().info("Redo Initialization refused: unpushed commits. Nothing was touched.")
+            return False
+        redo.execute(app.paths, store, discard_unpushed=True)
+
+    app.reset()
+    return True
 
 
 # --- history, backups, machines, the log --------------------------------------------------------

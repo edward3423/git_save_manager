@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from core import config as config_module
-from core import github, vault
+from core import github, operations, vault
 from core.config import Config, MachineDescription
 from core.github import Answer, BootstrapOutcome
 from core.paths import Paths
@@ -197,6 +197,71 @@ def test_a_repo_that_is_a_vault_is_joined_and_this_machine_registers_itself(hub,
     assert MACHINE_A in served(hub, "edward/saves", f"machines/{MACHINE_A}.json")
     assert paths_b.machine_file(MACHINE_A).exists()
     assert vault.is_clean(paths_b)
+
+
+def test_a_reinstalled_machine_with_the_same_hostname_may_adopt_its_old_identity(
+    hub, machine, tmp_path
+):
+    """After a Redo Initialization the hostname usually still matches the Machine's old
+    published file. Adopting reclaims the UUID and the published Bindings, rather than
+    leaving a ghost Machine behind forever."""
+    paths_a, config_a, description_a = machine
+    github.bootstrap(paths_a, config_a, description_a, api=hub, token=TOKEN, repo="edward/saves")
+    live = paths_a.root / "live" / "Elden Ring"
+    live.mkdir(parents=True)
+    (live / "slot1.sav").write_text("progress", encoding="utf-8")
+    from core.ledger import Ledger
+
+    entry = operations.add_entry(paths_a, config_a, description_a, Ledger(), "Elden Ring", live)
+    vault.git(paths_a).run("push", "-q", "origin", "main")
+
+    reinstalled = Paths(root=tmp_path / "reinstalled")
+    reinstalled.data_dir.mkdir(parents=True)
+    fresh = Config()  # a brand-new UUID, as after a Redo
+    offered = []
+
+    done = github.bootstrap(
+        reinstalled,
+        fresh,
+        description_a,  # same hostname
+        api=hub,
+        token=TOKEN,
+        repo="edward/saves",
+        adopt=lambda ghost: offered.append(ghost) or True,
+    )
+
+    assert done.outcome is BootstrapOutcome.JOINED
+    assert fresh.machine_id == MACHINE_A  # the identity came back
+    assert offered[0]["machine_id"] == MACHINE_A
+    assert done.adopted is not None
+    assert done.adopted["bindings"] == {entry.entry_id: str(live)}
+    # And the published file still carries the Bindings - adoption must not blank them.
+    assert entry.entry_id in served(hub, "edward/saves", f"machines/{MACHINE_A}.json")
+
+
+def test_declining_adoption_registers_a_fresh_machine_and_leaves_the_ghost(hub, machine, tmp_path):
+    paths_a, config_a, description_a = machine
+    github.bootstrap(paths_a, config_a, description_a, api=hub, token=TOKEN, repo="edward/saves")
+
+    reinstalled = Paths(root=tmp_path / "reinstalled")
+    reinstalled.data_dir.mkdir(parents=True)
+    fresh = Config()
+    original = fresh.machine_id
+
+    done = github.bootstrap(
+        reinstalled,
+        fresh,
+        description_a,
+        api=hub,
+        token=TOKEN,
+        repo="edward/saves",
+        adopt=lambda _ghost: False,
+    )
+
+    assert done.adopted is None
+    assert fresh.machine_id == original
+    assert MACHINE_A in served(hub, "edward/saves", f"machines/{MACHINE_A}.json")  # the ghost
+    assert original in served(hub, "edward/saves", f"machines/{original}.json")  # and the new
 
 
 def test_a_machine_that_already_registered_can_join_again(hub, machine, tmp_path):

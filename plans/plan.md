@@ -230,8 +230,8 @@ Considered and deliberately rejected. Recorded so they are not re-litigated.
 | `core/cloud` - Pull/Push, fetch status, Offline Mode, Merge Conflict resolution | merged (#9) | autonomous |
 | `core/github-bootstrap` - four bootstrap paths, `vault.json` marker, PAT hygiene | merged (#10) | autonomous |
 | `ui/foundation` - `app.lock`, startup sequence, main window shell, presenter | merged (#11) | autonomous |
-| `ui/dialogs` - setup, Add/Bind, previews, Conflict, History, Backups, Machines | open (#12) | autonomous |
-| `ui/redo-init` - Redo Initialization, refusals and enumeration | | autonomous |
+| `ui/dialogs` - setup, Add/Bind, previews, Conflict, History, Backups, Machines | merged (#12) | autonomous |
+| `ui/redo-init` - Redo Initialization, refusals and enumeration | open (#13) | autonomous |
 
 **Three slices stop at the pull request rather than merging on green.** They are the ones that can lose save data, and they share a failure mode no amount of automation catches: the same author writes the code, writes the tests, and judges whether they pass. Tests written from the same wrong mental model as the code agree with it enthusiastically. A wrong-but-green `ledger-state` looks perfect right up until the day it overwrites a Machine's progress with a stale save and reports success.
 

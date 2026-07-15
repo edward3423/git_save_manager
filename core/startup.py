@@ -46,6 +46,19 @@ class App:
     def shutdown(self) -> None:
         self.held.release()
 
+    def reset(self) -> None:
+        """Reload everything from disk after a Redo Initialization, in the running window.
+
+        Behaves like a first launch without being one: a fresh Config (and Machine ID) is
+        generated and persisted by `config.load`, the Ledger is empty, and the Cloud starts
+        over - it must not stay Offline against a Vault that no longer exists, and its last
+        known status described a remote this Machine is no longer set up against.
+        """
+        self.config = config_module.load(self.paths)
+        self.the_ledger = ledger.load(self.paths)
+        self.cloud = Cloud(paths=self.paths, config=self.config)
+        self.recovered = None
+
 
 def start(paths: Paths, description: MachineDescription | None = None) -> App:
     """Bring the application up, or raise before anything is touched.
