@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from core import entries, ledger, redo, vault
+from core import entries, ledger, operations, redo, vault
 from core.cloud import Cloud, CloudState
 from core.config import Config
 from core.entry_state import EntryState, EntryStatus
@@ -151,6 +151,24 @@ def preview_lines(preview: Preview) -> list[str]:
         "The current Live Save is archived to a Backup first."
         if preview.will_back_up
         else "No Backup is taken: the Live Save holds no content to archive."
+    )
+    return found
+
+
+def rollback_lines(
+    name: str, short_sha: str, changes: list[operations.RollbackChange]
+) -> list[str]:
+    """The Rollback confirmation, as text: every file the Vault copy would change, and the
+    reassurances that make Rollback safe - no Live Save is touched, and nothing is rewritten.
+
+    Sizes are omitted (the engine diffs history, not a working tree); the paths are enough.
+    """
+    found = [f"This changes the Vault copy of {name} to {short_sha}:"]
+    found += [f"  {CHANGE_WORDS[change.change]}  {change.path}" for change in changes]
+    found.append("")
+    found.append(
+        "No Live Save is touched, and nothing is rewritten: the version you roll away from "
+        "stays in history. The Entry will read Vault Ahead; restoring it is the next step."
     )
     return found
 

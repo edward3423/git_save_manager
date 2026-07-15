@@ -77,9 +77,19 @@ class NothingToSync(Exception):
 # --- commits carry the Machine that made them ---------------------------------------------
 
 
-def _commit(paths: Paths, config: Config, description: MachineDescription, message: str) -> str:
+def _commit(
+    paths: Paths,
+    config: Config,
+    description: MachineDescription,
+    message: str,
+    body: str | None = None,
+) -> str:
+    """Commit the staged tree. `message` is the structured machine subject; `body`, when given,
+    is the user's own note, carried as the commit body - a second `-m` git renders as
+    `subject\\n\\nbody`, leaving the scannable subject line untouched."""
     repo = git(paths)
-    repo.run("commit", "-m", message, config=vault.commit_identity(config, description))
+    extra = ["-m", body] if body else []
+    repo.run("commit", "-m", message, *extra, config=vault.commit_identity(config, description))
     return repo.run("rev-parse", "HEAD").strip()
 
 
@@ -332,10 +342,14 @@ def sync_to_vault(
     description: MachineDescription,
     the_ledger: Ledger,
     entry_id: str,
+    note: str | None = None,
 ) -> Synced:
     """Copy the Live Save into the Vault and commit it. One commit, one Entry, atomically.
 
     The only writer of a new Baseline, and it writes one only once the commit has landed.
+
+    `note` is the user's optional one-line summary of what this Sync captures ("boss slain",
+    "graphics tweaked"). It rides along as the commit body and surfaces in History and the log.
     """
     vault.ensure_clean(paths)
 
@@ -367,7 +381,11 @@ def sync_to_vault(
 
         if _stage(paths, entry_id):
             commit = _commit(
-                paths, config, description, f"sync({entry.name}): from {description.hostname}"
+                paths,
+                config,
+                description,
+                f"sync({entry.name}): from {description.hostname}",
+                body=note,
             )
             log().info("Synced %s to the Vault (%s)", entry.name, commit[:8])
         else:
@@ -500,6 +518,8 @@ class Commit:
     machine: str
     when: datetime
     subject: str
+    body: str = ""
+    """The author's own note, if any - a one-line summary of what the Sync captured."""
 
     @property
     def short(self) -> str:
@@ -512,25 +532,79 @@ def history(paths: Paths, entry_id: str, limit: int = 100) -> list[Commit]:
     Deliberately **not** `--follow`: `git log --help` states it "works only for a single
     file", and an Entry is usually a directory. Nothing is lost by its absence - identity is a
     UUID, so an Entry's path never moves and there is no rename to follow.
+
+    Records are NUL-terminated (`-z`) rather than newline-split: the body carries the user's
+    note, and a note is free to contain whatever a line-based parse would mistake for the next
+    commit.
     """
     raw = git(paths).run(
         "log",
         f"-{limit}",
-        "--format=%H%x1f%an%x1f%aI%x1f%s",
+        "-z",
+        "--format=%H%x1f%an%x1f%aI%x1f%s%x1f%b",
         "--",
         f"entries/{entry_id}",
         f"entries/{entry_id}.json",
     )
 
     found = []
+    for record in raw.split("\0"):
+        if not record.strip():
+            continue
+        sha, machine, when, subject, body = record.split("\x1f")
+        found.append(
+            Commit(
+                sha=sha,
+                machine=machine,
+                when=datetime.fromisoformat(when),
+                subject=subject,
+                body=body.strip(),
+            )
+        )
+    return found
+
+
+@dataclass(frozen=True)
+class RollbackChange:
+    """One path a rollback would touch in the Vault. Sizes are deliberately omitted: the diff
+    is against git history, not a working tree to be measured, and the file list is enough to
+    decide."""
+
+    path: str
+    change: transaction.Change
+
+
+# `git diff --name-status` reports the target relative to the *source*, which is exactly this
+# rollback's direction (current HEAD -> the chosen commit): a path only in the commit is added,
+# a path only in HEAD is deleted, a changed one is overwritten.
+_STATUS_CHANGE = {
+    "A": transaction.Change.ADD,
+    "M": transaction.Change.REPLACE,
+    "T": transaction.Change.REPLACE,  # a file became a symlink or vice-versa: still a rewrite
+    "D": transaction.Change.REMOVE,
+}
+
+
+def preview_rollback(paths: Paths, entry_id: str, sha: str) -> list[RollbackChange]:
+    """Exactly which files a rollback to `sha` would add, overwrite, or delete in the Vault.
+
+    Reads only git history - it stages nothing and touches no working tree, so it is safe to
+    call to fill a confirmation dialog. An empty list means the Vault already holds that
+    version and the rollback would be a no-op (`rollback` itself makes the same check).
+    """
+    content = f"entries/{entry_id}"
+    raw = git(paths).run("diff", "--no-renames", "--name-status", "HEAD", sha, "--", content)
+
+    prefix = f"{content}/"
+    found = []
     for line in raw.splitlines():
         if not line.strip():
             continue
-        sha, machine, when, subject = line.split("\x1f")
-        found.append(
-            Commit(sha=sha, machine=machine, when=datetime.fromisoformat(when), subject=subject)
-        )
-    return found
+        status, path = line.split("\t", 1)
+        change = _STATUS_CHANGE.get(status[:1], transaction.Change.REPLACE)
+        shown = path[len(prefix) :] if path.startswith(prefix) else path
+        found.append(RollbackChange(path=shown, change=change))
+    return sorted(found, key=lambda c: c.path)
 
 
 def rollback(

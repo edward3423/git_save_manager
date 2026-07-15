@@ -52,14 +52,14 @@ def _fail(parent: QWidget | None, title: str, error: Exception) -> None:
 class PreviewDialog(QDialog):
     """Exactly what will happen, before it does. OK means "do exactly this, or nothing"."""
 
-    def __init__(self, title: str, preview: Preview, parent: QWidget | None = None) -> None:
+    def __init__(self, title: str, lines: list[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.resize(560, 360)
 
         text = QPlainTextEdit()
         text.setReadOnly(True)
-        text.setPlainText("\n".join(presenter.preview_lines(preview)))
+        text.setPlainText("\n".join(lines))
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -73,7 +73,14 @@ class PreviewDialog(QDialog):
 
     @staticmethod
     def approve(title: str, preview: Preview, parent: QWidget | None = None) -> bool:
-        return PreviewDialog(title, preview, parent).exec() == QDialog.DialogCode.Accepted
+        """Approve a Live Save write: Restore, conflict-resolve, Backup restore."""
+        return PreviewDialog.approve_lines(title, presenter.preview_lines(preview), parent)
+
+    @staticmethod
+    def approve_lines(title: str, lines: list[str], parent: QWidget | None = None) -> bool:
+        """Approve any pre-rendered change list - used by the Vault-side Rollback preview,
+        whose wording is not a Live Save write and so cannot go through `preview_lines`."""
+        return PreviewDialog(title, lines, parent).exec() == QDialog.DialogCode.Accepted
 
 
 # --- first-run setup ----------------------------------------------------------------------------
@@ -332,6 +339,43 @@ class BindDialog(QDialog):
         self.accept()
 
 
+class SyncDialog(QDialog):
+    """A one-line summary of what this Sync captures, before it is committed to the Vault.
+
+    The summary is optional and only ever a note: it becomes the commit body, and History and
+    the log surface it. The Sync itself is unchanged whether or not one is written.
+    """
+
+    def __init__(self, name: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Sync {name} to the Vault")
+        self.setMinimumWidth(460)
+
+        self.note_edit = QLineEdit()
+        self.note_edit.setPlaceholderText("boss slain, graphics tweaked, ... (optional)")
+
+        form = QFormLayout()
+        form.addRow("Summary", self.note_edit)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def ask(name: str, parent: QWidget | None = None) -> str | None:
+        """The user's summary (possibly empty) to Sync with, or None if they cancelled."""
+        dialog = SyncDialog(name, parent)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog.note_edit.text().strip()
+
+
 # --- conflicts: always two buttons, always the whole Entry --------------------------------------
 
 
@@ -470,9 +514,10 @@ class HistoryDialog(QDialog):
         self.commits = operations.history(app.paths, entry_id)
         self.listing = QListWidget()
         for commit in self.commits:
+            message = f" {commit.body} " if commit.body else ""
             self.listing.addItem(
-                f"{commit.when:%Y-%m-%d %H:%M}  {commit.machine:<12}  "
-                f"{commit.subject}  [{commit.short}]"
+                f"{commit.when:%Y-%m-%d %H:%M} |{message}| "
+                f"{commit.machine} | {commit.subject} | [{commit.short}]"
             )
 
         rollback = QPushButton("Roll back to selected...")
@@ -494,15 +539,19 @@ class HistoryDialog(QDialog):
         if index < 0:
             return
         commit = self.commits[index]
-        answer = QMessageBox.question(
-            self,
-            "Roll back",
-            f"Return {self.name} in the Vault to {commit.short} ({commit.subject})?\n\n"
-            "This is a new forward commit - nothing is rewritten, and no Live Save is "
-            "touched. The Entry will read Vault Ahead; restoring it is the next, separate "
-            "step.",
-        )
-        if answer is QMessageBox.StandardButton.Yes:
+
+        changes = operations.preview_rollback(self.app.paths, self.entry_id, commit.sha)
+        if not changes:
+            QMessageBox.information(
+                self,
+                "Roll back",
+                f"{self.name} already holds {commit.short} ({commit.subject}). "
+                "Nothing to roll back.",
+            )
+            return
+
+        lines = presenter.rollback_lines(self.name, commit.short, changes)
+        if PreviewDialog.approve_lines(f"Roll back {self.name} to {commit.short}", lines, self):
             operations.rollback(
                 self.app.paths, self.app.config, self.app.description, self.entry_id, commit.sha
             )
@@ -613,11 +662,13 @@ class GitLogDialog(QDialog):
         self.setWindowTitle("Full Git Log")
         self.resize(720, 480)
 
+        # `%b` appends the author's note inline; commits without one leave only trailing
+        # whitespace, so the note-carrying Syncs stand out without a blank line per commit.
         raw = vault.git(app.paths).run(
             "log",
             "--graph",
             "--date=short",
-            "--format=%h %ad %an  %s",
+            "--format=%h %ad %an  %s  %b",
             "-100",
         )
         text = QPlainTextEdit()
