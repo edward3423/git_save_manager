@@ -359,6 +359,9 @@ class MainWindow(QMainWindow):
         row = self._revalidated(Action.SYNC_TO_VAULT)
         if row is None:
             return
+        note = dialogs.SyncDialog.ask(row.name, self)
+        if note is None:  # the Sync was cancelled
+            return
         try:
             operations.sync_to_vault(
                 self.app.paths,
@@ -366,6 +369,7 @@ class MainWindow(QMainWindow):
                 self.app.description,
                 self.app.the_ledger,
                 row.entry_id,
+                note=note or None,
             )
         except (operations.SyncAborted, operations.NothingToSync) as error:
             log().warning("%s", error)

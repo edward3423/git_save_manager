@@ -8,7 +8,7 @@ import shutil
 
 import pytest
 
-from core import backups, entries, ledger, operations, vault
+from core import backups, entries, ledger, operations, transaction, vault
 from core.config import Config, MachineDescription
 from core.entry_state import Action, EntryState
 from core.hashing import content_hash
@@ -346,6 +346,29 @@ def test_history_lists_every_commit_that_touched_the_entry(
     ]
 
 
+def test_a_sync_note_rides_along_as_the_commit_body_and_shows_in_history(
+    paths, config, description, the_ledger, live, entry
+):
+    """The user's one-line summary is carried as the commit body, leaving the machine subject
+    untouched, and History reads it back."""
+    operations.sync_to_vault(
+        paths, config, description, the_ledger, entry.entry_id, note="beat Malenia"
+    )
+
+    top = operations.history(paths, entry.entry_id)[0]
+    assert top.subject == "sync(Elden Ring): from laptop"  # subject is unchanged by the note
+    assert top.body == "beat Malenia"
+
+
+def test_a_sync_without_a_note_has_an_empty_body(
+    paths, config, description, the_ledger, live, entry
+):
+    """No note means no body - not a stray blank line the display would have to special-case."""
+    operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
+
+    assert operations.history(paths, entry.entry_id)[0].body == ""
+
+
 def test_rollback_is_a_forward_commit_that_lands_the_entry_in_vault_ahead(
     paths, config, description, the_ledger, live, entry
 ):
@@ -373,6 +396,40 @@ def test_rollback_is_a_forward_commit_that_lands_the_entry_in_vault_ahead(
 
     # and the regretted version is still reachable
     assert len(operations.history(paths, entry.entry_id)) == 4
+
+
+def test_preview_rollback_lists_every_file_the_vault_change_would_touch(
+    paths, config, description, the_ledger, live, entry
+):
+    """The confirmation is built from git history alone - it stages nothing and changes no
+    working tree - and reports adds, overwrites, and deletes against the current Vault."""
+    operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
+    good = next(
+        c for c in operations.history(paths, entry.entry_id) if c.subject.startswith("sync")
+    )
+
+    (live / "slot1.sav").write_text("later, regretted progress", encoding="utf-8")
+    (live / "slot2.sav").write_text("a whole new save", encoding="utf-8")
+    operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
+
+    changes = operations.preview_rollback(paths, entry.entry_id, good.sha)
+
+    # Rolling HEAD back to `good`: slot1 returns to its old content, slot2 never existed there.
+    assert {(c.path, c.change) for c in changes} == {
+        ("slot1.sav", transaction.Change.REPLACE),
+        ("slot2.sav", transaction.Change.REMOVE),
+    }
+    assert vault.is_clean(paths)  # previewing touched nothing
+
+
+def test_preview_rollback_to_the_current_version_is_empty(
+    paths, config, description, the_ledger, live, entry
+):
+    """An empty diff is the no-op signal the dialog uses to say 'already at that version'."""
+    operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
+    head = operations.history(paths, entry.entry_id)[0]
+
+    assert operations.preview_rollback(paths, entry.entry_id, head.sha) == []
 
 
 def test_rolling_back_with_unsynced_local_changes_lands_in_conflict(
