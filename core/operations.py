@@ -83,6 +83,19 @@ def _commit(paths: Paths, config: Config, description: MachineDescription, messa
     return repo.run("rev-parse", "HEAD").strip()
 
 
+def _publish_bindings(
+    paths: Paths, config: Config, description: MachineDescription, the_ledger: Ledger
+) -> None:
+    """Rewrite and stage this Machine's published file so it matches the Ledger.
+
+    Published means committed: the caller commits. One writer per file (ADR-0003), so this
+    can never merge-conflict with anything another Machine publishes.
+    """
+    published = {entry_id: binding.live_path for entry_id, binding in the_ledger.bindings.items()}
+    vault.write_machine_file(paths, config, description, published)
+    git(paths).run("add", "-A", "--", "machines")
+
+
 def _stage(paths: Paths, entry_id: str) -> bool:
     """Stage an Entry's content and sidecar. True if anything actually changed.
 
@@ -148,6 +161,7 @@ def add_entry(
     vault.set_sparse(paths, the_ledger.bindings)
 
     _stage(paths, entry.entry_id)
+    _publish_bindings(paths, config, description, the_ledger)
     _commit(paths, config, description, f"add({name}): from {description.hostname}")
 
     log().info("Added %s, bound to %s", name, live_path)
@@ -176,6 +190,58 @@ def rename_entry(
     return entry
 
 
+def bind_entry(
+    paths: Paths,
+    config: Config,
+    description: MachineDescription,
+    the_ledger: Ledger,
+    entry_id: str,
+    live_path: Path,
+) -> None:
+    """Bind an Unlinked Entry to a path on this Machine, publish it, and widen the cone.
+
+    No Baseline is written: a Binding is not a Sync, and adopting one here would claim a
+    Sync that never happened. The Entry surfaces as Vault Ahead or Local Ahead (or Conflict,
+    when both sides hold different content), and the first data movement is the user's.
+    """
+    vault.ensure_clean(paths)
+    entry = entries.require(paths, entry_id)
+
+    the_ledger.bind(entry_id, live_path)
+    ledger.save(paths, the_ledger)
+    vault.set_sparse(paths, the_ledger.bindings)
+
+    _publish_bindings(paths, config, description, the_ledger)
+    _commit(paths, config, description, f"bind({entry.name}): from {description.hostname}")
+    log().info("Bound %s to %s", entry.name, live_path)
+
+
+def unbind_entry(
+    paths: Paths,
+    config: Config,
+    description: MachineDescription,
+    the_ledger: Ledger,
+    entry_id: str,
+) -> None:
+    """Drop the Binding and Baseline on this Machine only. The Entry returns to Unlinked.
+
+    The Vault keeps the Entry and its history, other Machines are unaffected, and the Live
+    Save is not touched (Invariant 1). Fully reversible: binding it again is `bind_entry`.
+    The one commit made here holds no save data - it retracts the Binding from this
+    Machine's published file, because published means committed.
+    """
+    vault.ensure_clean(paths)
+    entry = entries.require(paths, entry_id)
+
+    the_ledger.unbind(entry_id)
+    ledger.save(paths, the_ledger)
+    vault.set_sparse(paths, the_ledger.bindings)
+
+    _publish_bindings(paths, config, description, the_ledger)
+    _commit(paths, config, description, f"unbind({entry.name}): from {description.hostname}")
+    log().info("Unbound %s. The Live Save was not touched.", entry.name)
+
+
 def remove_from_vault(
     paths: Paths,
     config: Config,
@@ -195,10 +261,12 @@ def remove_from_vault(
 
     repo.run("rm", "-r", "-q", "--ignore-unmatch", "--", f"entries/{entry_id}")
     repo.run("rm", "-q", "--ignore-unmatch", "--", f"entries/{entry_id}.json")
-    _commit(paths, config, description, f"remove({entry.name}): from {description.hostname}")
 
     the_ledger.unbind(entry_id)
     ledger.save(paths, the_ledger)
+    _publish_bindings(paths, config, description, the_ledger)
+
+    _commit(paths, config, description, f"remove({entry.name}): from {description.hostname}")
     vault.set_sparse(paths, the_ledger.bindings)
 
     log().info("Removed %s from the Vault. No Live Save was touched.", entry.name)
