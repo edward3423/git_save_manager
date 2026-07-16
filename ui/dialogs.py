@@ -13,6 +13,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -22,6 +23,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMenu,
     QMessageBox,
     QPlainTextEdit,
@@ -512,13 +514,22 @@ class HistoryDialog(QDialog):
         self.resize(640, 420)
 
         self.commits = operations.history(app.paths, entry_id)
+        unpushed = operations.unpushed_commits(app.paths)
         self.listing = QListWidget()
         for commit in self.commits:
             message = f" {commit.body} " if commit.body else ""
-            self.listing.addItem(
-                f"{commit.when:%Y-%m-%d %H:%M} |{message}| "
+            ahead = commit.sha in unpushed
+            # A leading [unpushed] tag marks the local-ahead commits without relying on colour
+            # alone; pushed rows carry no tag, so everything sits flush left rather than padded.
+            marker = "[unpushed] " if ahead else ""
+            item = QListWidgetItem(
+                f"{marker}{commit.when:%Y-%m-%d %H:%M} |{message}| "
                 f"{commit.machine} | {commit.subject} | [{commit.short}]"
             )
+            if ahead:
+                item.setForeground(QColor("#3d8bfd"))
+                item.setToolTip("Local Ahead: this commit has not been pushed to the Cloud Vault.")
+            self.listing.addItem(item)
 
         rollback = QPushButton("Roll back to selected...")
         rollback.clicked.connect(self.run_rollback)

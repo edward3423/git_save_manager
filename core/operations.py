@@ -592,6 +592,17 @@ def history(paths: Paths, entry_id: str, limit: int = 100) -> list[Commit]:
     return found
 
 
+def unpushed_commits(paths: Paths) -> set[str]:
+    """The full SHAs on HEAD the Cloud Vault does not yet have - the local-ahead commits a Push
+    would upload.
+
+    `--not --remotes=origin` excludes everything already reachable from any `origin/*` ref, so a
+    Vault that has never been pushed (no origin refs at all) correctly reports every commit as
+    unpushed, with no special case for the missing tracking ref.
+    """
+    return set(git(paths).run("rev-list", "HEAD", "--not", "--remotes=origin").split())
+
+
 @dataclass(frozen=True)
 class RollbackChange:
     """One path a rollback would touch in the Vault. Sizes are deliberately omitted: the diff

@@ -154,6 +154,22 @@ def test_unpushed_local_commits_read_as_ahead(desktop):
     assert (status.ahead, status.behind) == (1, 0)
 
 
+def test_unpushed_commits_are_reported_until_they_are_pushed(laptop):
+    """History colours the local-ahead commits: the ones on HEAD the Cloud Vault does not yet
+    have. Every commit is unpushed until a Push, and none afterwards."""
+    laptop.play("Elden Ring", "progress")
+    entry = laptop.add("Elden Ring")
+    laptop.sync(entry.entry_id)
+
+    synced = next(
+        c for c in operations.history(laptop.paths, entry.entry_id) if c.subject.startswith("sync")
+    )
+    assert synced.sha in operations.unpushed_commits(laptop.paths)
+
+    laptop.cloud.push(pat=PAT)
+    assert operations.unpushed_commits(laptop.paths) == set()  # all caught up
+
+
 def test_another_machines_pushed_work_reads_as_behind_and_is_not_pulled(laptop, desktop):
     """Never auto-pull: the status is an observation, not an action."""
     laptop.play("Elden Ring", "progress")
