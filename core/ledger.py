@@ -25,7 +25,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from core import entry_state
+from core import entries, entry_state
 from core.entry_state import EntryStatus
 from core.hashing import HashCache
 from core.jsonstore import read_json, write_json
@@ -195,9 +195,15 @@ def refresh(
     again on the very next launch.
     """
     binding = ledger.require(entry_id)
+    entry = entries.read(paths, entry_id)
+    vault_path = (
+        entries.content_path(paths, entry)
+        if entry is not None
+        else paths.entry_content_dir(entry_id)
+    )
     status = entry_state.evaluate_entry(
         live_path=binding.live,
-        vault_path=paths.entry_content_dir(entry_id),
+        vault_path=vault_path,
         baseline=binding.baseline,
         cache=cache,
     )

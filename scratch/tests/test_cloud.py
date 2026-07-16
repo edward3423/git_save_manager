@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from core import cloud, ledger, operations, vault
+from core import cloud, entries, ledger, operations, vault
 from core.cloud import Cloud, CloudOffline, CloudState, OfflineReason, PushRejected, classify
 from core.config import Config, MachineDescription
 from core.entries import Entry
@@ -76,6 +76,10 @@ class Machine:
 
     def state(self, entry_id: str):
         return ledger.refresh(self.paths, self.the_ledger, entry_id)
+
+    def vaulted(self, entry_id: str) -> Path:
+        """The Entry's stored folder itself (`entries/<id>/<name>`), not the cone wrapper."""
+        return entries.content_path(self.paths, entries.require(self.paths, entry_id))
 
     def register(self) -> None:
         """Commit this Machine's published file - the second-machine path, by hand for now."""
@@ -316,7 +320,7 @@ def test_resolving_toward_the_cloud_takes_their_save_whole_and_keeps_ours_in_his
     assert vault.is_clean(desktop.paths)
     assert not cloud.merging(desktop.paths)
 
-    vaulted = desktop.paths.entry_content_dir(entry.entry_id) / "slot1.sav"
+    vaulted = desktop.vaulted(entry.entry_id) / "slot1.sav"
     assert vaulted.read_text(encoding="utf-8") == "the laptop's line of progress"
     assert repo.run("rev-parse", "HEAD^1").strip() == ours  # the losing side is a parent,
     live = desktop.live("Elden Ring") / "slot1.sav"  # and the Live Save is untouched
@@ -339,7 +343,7 @@ def test_resolving_toward_the_vault_keeps_our_save_and_the_cloud_line_in_history
     repo = vault.git(desktop.paths)
     assert vault.is_clean(desktop.paths)
 
-    vaulted = desktop.paths.entry_content_dir(entry.entry_id) / "slot1.sav"
+    vaulted = desktop.vaulted(entry.entry_id) / "slot1.sav"
     assert vaulted.read_text(encoding="utf-8") == "the desktop's line of progress"
     assert repo.run("rev-parse", "HEAD^2").strip() == theirs  # the cloud line is a parent
 
@@ -379,7 +383,7 @@ def test_aborting_the_merge_walks_away_with_nothing_changed(desktop, contested):
 
     assert not cloud.merging(desktop.paths)
     assert vault.is_clean(desktop.paths)
-    vaulted = desktop.paths.entry_content_dir(entry.entry_id) / "slot1.sav"
+    vaulted = desktop.vaulted(entry.entry_id) / "slot1.sav"
     assert vaulted.read_text(encoding="utf-8") == "the desktop's line of progress"
 
 

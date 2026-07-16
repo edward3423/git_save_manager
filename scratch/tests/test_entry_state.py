@@ -255,11 +255,14 @@ def test_a_live_save_that_does_not_exist_yet_is_vault_ahead(tmp_path):
 
 
 def test_a_single_file_entry_moves_through_the_states(tmp_path):
-    """Entries are not always directories: an application settings file is one file."""
+    """Entries are not always directories: an application settings file is one file. In the
+    Vault it lives inside its Entry directory under its own name (`entries/<id>/settings.ini`),
+    so the Live file and that one-file directory hash identically and In Sync is reachable."""
     live = tmp_path / "settings.ini"
-    vault = tmp_path / "vault-settings.ini"
+    vault = tmp_path / "vault"
+    vault.mkdir()
     live.write_text("volume=11", encoding="utf-8")
-    vault.write_text("volume=11", encoding="utf-8")
+    (vault / "settings.ini").write_text("volume=11", encoding="utf-8")
 
     baseline = evaluate_entry(live, vault, None).baseline_repair
     assert evaluate_entry(live, vault, baseline).state is EntryState.IN_SYNC

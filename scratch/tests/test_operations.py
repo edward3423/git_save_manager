@@ -63,6 +63,11 @@ def state(paths, the_ledger, entry_id):
     return ledger.refresh(paths, the_ledger, entry_id)
 
 
+def vault_content(paths, entry_id):
+    """The Entry's stored file or folder itself (`entries/<id>/<name>`), not the cone wrapper."""
+    return entries.content_path(paths, entries.require(paths, entry_id))
+
+
 # --- adding --------------------------------------------------------------------------------------
 
 
@@ -105,10 +110,33 @@ def test_a_sync_commits_the_save_and_records_a_baseline(
 ):
     synced = operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
 
-    assert content_hash(paths.entry_content_dir(entry.entry_id)) == content_hash(live)
+    assert content_hash(vault_content(paths, entry.entry_id)) == content_hash(live)
     assert the_ledger.get(entry.entry_id).baseline == synced.baseline
     assert state(paths, the_ledger, entry.entry_id).state is EntryState.IN_SYNC
     assert vault.is_clean(paths)
+
+
+def test_a_folder_entry_is_stored_nested_under_its_own_name(
+    paths, config, description, the_ledger, tmp_path
+):
+    """The Vault mirrors what the user pointed at: binding `.../123` with `a.py` and `b.py` in it
+    stores `entries/<id>/123/a.py` and `.../123/b.py`, not the files loose at `entries/<id>`.
+
+    The folder name is not part of the content hash, though - it is the wrapper that is hashed
+    from the inside - so the same save re-bound under a different folder name stays In Sync."""
+    folder = tmp_path / "123"
+    folder.mkdir()
+    (folder / "a.py").write_text("a", encoding="utf-8")
+    (folder / "b.py").write_text("b", encoding="utf-8")
+
+    entry = operations.add_entry(paths, config, description, the_ledger, "Project", folder)
+    operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
+
+    nest = paths.entry_content_dir(entry.entry_id) / "123"
+    assert (nest / "a.py").read_text(encoding="utf-8") == "a"
+    assert (nest / "b.py").read_text(encoding="utf-8") == "b"
+    assert entries.require(paths, entry.entry_id).content_name == "123"
+    assert state(paths, the_ledger, entry.entry_id).state is EntryState.IN_SYNC
 
 
 def test_the_commit_is_authored_by_the_machine_that_made_it(
@@ -200,7 +228,7 @@ def test_an_aborted_sync_leaves_a_previously_synced_entry_exactly_as_it_was(
 ):
     """The Vault must not be left holding a half-copied save from a Sync that failed."""
     operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
-    good = content_hash(paths.entry_content_dir(entry.entry_id))
+    good = content_hash(vault_content(paths, entry.entry_id))
     baseline = the_ledger.get(entry.entry_id).baseline
 
     (live / "slot1.sav").write_text("more progress", encoding="utf-8")
@@ -216,7 +244,7 @@ def test_an_aborted_sync_leaves_a_previously_synced_entry_exactly_as_it_was(
     with pytest.raises(SyncAborted):
         operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
 
-    assert content_hash(paths.entry_content_dir(entry.entry_id)) == good  # untouched
+    assert content_hash(vault_content(paths, entry.entry_id)) == good  # untouched
     assert the_ledger.get(entry.entry_id).baseline == baseline  # unmoved
 
 
@@ -234,7 +262,7 @@ def test_a_failed_commit_leaves_no_baseline_and_no_wreckage(
     Invariant 2, and the next status refresh would read it as though it were the Vault.
     """
     operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
-    in_the_vault = content_hash(paths.entry_content_dir(entry.entry_id))
+    in_the_vault = content_hash(vault_content(paths, entry.entry_id))
     baseline = the_ledger.get(entry.entry_id).baseline
 
     (live / "slot1.sav").write_text("progress I am trying to save", encoding="utf-8")
@@ -250,7 +278,7 @@ def test_a_failed_commit_leaves_no_baseline_and_no_wreckage(
     monkeypatch.undo()
 
     assert vault.is_clean(paths)
-    assert content_hash(paths.entry_content_dir(entry.entry_id)) == in_the_vault  # no wreckage
+    assert content_hash(vault_content(paths, entry.entry_id)) == in_the_vault  # no wreckage
     assert the_ledger.get(entry.entry_id).baseline == baseline  # and no Baseline was written
 
     status = state(paths, the_ledger, entry.entry_id)
@@ -266,7 +294,7 @@ def test_a_restore_writes_the_vault_over_the_live_save_and_backs_it_up(
     paths, config, description, the_ledger, live, entry
 ):
     operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
-    in_the_vault = content_hash(paths.entry_content_dir(entry.entry_id))
+    in_the_vault = content_hash(vault_content(paths, entry.entry_id))
 
     (live / "slot1.sav").write_text("progress I am about to discard", encoding="utf-8")
     doomed = content_hash(live)
@@ -387,7 +415,7 @@ def test_rollback_is_a_forward_commit_that_lands_the_entry_in_vault_ahead(
 
     operations.rollback(paths, config, description, entry.entry_id, good.sha)
 
-    assert content_hash(paths.entry_content_dir(entry.entry_id)) == old_content
+    assert content_hash(vault_content(paths, entry.entry_id)) == old_content
     assert content_hash(live) == regretted  # the Live Save is untouched by a rollback
 
     status = state(paths, the_ledger, entry.entry_id)
@@ -498,8 +526,10 @@ def test_renaming_moves_no_data_and_keeps_the_binding(
 
 
 def test_a_single_file_entry_syncs_and_restores(paths, config, description, the_ledger, tmp_path):
-    """An application's settings file, not a save folder. The Vault mirrors the Live Save's
-    kind exactly - a file stays a file - so the two hash identically and In Sync is reachable."""
+    """An application's settings file, not a save folder. The file is stored *inside* its Entry
+    directory as `entries/<id>/<name>` - a bare file at `entries/<id>` is one the sparse cone
+    could not select - and the sidecar records the name so Restore rebuilds a file, not a
+    folder. Live and Vault hash identically, so In Sync is reachable."""
     settings = tmp_path / "app" / "settings.ini"
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text("volume=11", encoding="utf-8")
@@ -507,11 +537,36 @@ def test_a_single_file_entry_syncs_and_restores(paths, config, description, the_
     entry = operations.add_entry(paths, config, description, the_ledger, "Settings", settings)
     operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
 
-    assert paths.entry_content_dir(entry.entry_id).is_file()
+    content = paths.entry_content_dir(entry.entry_id)
+    assert content.is_dir()  # a directory the cone can select, never a bare file
+    assert (content / "settings.ini").is_file()
+    assert entries.require(paths, entry.entry_id).content_name == "settings.ini"
     assert state(paths, the_ledger, entry.entry_id).state is EntryState.IN_SYNC
 
     settings.write_text("volume=3", encoding="utf-8")
     operations.restore_to_live(paths, config, the_ledger, entry.entry_id)
 
     assert settings.read_text(encoding="utf-8") == "volume=11"
-    assert settings.is_file()
+    assert settings.is_file()  # rebuilt as a file, not a directory
+
+
+def test_a_synced_single_file_entry_does_not_break_later_sparse_updates(
+    paths, config, description, the_ledger, tmp_path
+):
+    """Regression: a single file stored as a bare `entries/<id>` made the *next* sparse update
+    - any later Add or Bind - die with `'entries/<id>' is not a directory`, because cone-mode
+    `sparse-checkout set` cannot select a file. Stored inside its Entry directory, it is a
+    directory the cone selects like any other, and the follow-up Add succeeds."""
+    settings = tmp_path / "settings.ini"
+    settings.write_text("volume=11", encoding="utf-8")
+    first = operations.add_entry(paths, config, description, the_ledger, "Settings", settings)
+    operations.sync_to_vault(paths, config, description, the_ledger, first.entry_id)
+
+    folder = tmp_path / "saves"
+    folder.mkdir()
+    (folder / "slot1.sav").write_text("progress", encoding="utf-8")
+
+    # This Add runs set_sparse with the single-file Entry already committed - the crash path.
+    operations.add_entry(paths, config, description, the_ledger, "Game", folder)  # must not raise
+
+    assert (paths.entry_content_dir(first.entry_id) / "settings.ini").is_file()
