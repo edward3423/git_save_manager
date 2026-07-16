@@ -273,7 +273,7 @@ class AddEntryDialog(QDialog):
                 name,
                 Path(raw),
             )
-        except (vault.FileTooLarge, OSError) as error:
+        except (vault.FileTooLarge, operations.GitRepoNotAllowed, OSError) as error:
             _fail(self, "Add Entry", error)
             return
         QMessageBox.information(
