@@ -30,7 +30,6 @@ from pathlib import Path
 
 from core.hashing import (
     directory_digest,
-    file_digest,
     hash_stream,
     hash_symlink,
 )
@@ -93,8 +92,8 @@ def archive_hash(path: Path) -> str | None:
         members = _members(archive)
         if not members:
             return None
-        if archive.comment == SINGLE_FILE:
-            return file_digest(_member_digest(archive, members[0]))
+        # A single-file archive stores its one member under the file's name, so it hashes as
+        # the same one-member directory its Live Save and Vault copy do (see `hash_entry`).
         return directory_digest((info.filename, _member_digest(archive, info)) for info in members)
 
 

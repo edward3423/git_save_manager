@@ -163,7 +163,7 @@ def add_entry(
             "anything over 100 MB, and a commit it rejects can never leave the Vault."
         )
 
-    entry = Entry(entry_id=entries.new_id(), name=name)
+    entry = Entry(entry_id=entries.new_id(), name=name, content_name=_content_name(live_path))
     entries.write(paths, entry)
 
     the_ledger.bind(entry.entry_id, live_path)
@@ -313,8 +313,13 @@ class Synced:
     """None when the Vault already held exactly this content, so there was nothing to commit."""
 
 
-def _copy_into_vault(live: Path, destination: Path) -> None:
+def _copy_into_vault(live: Path, content_dir: Path) -> None:
     """Replace the Entry's Vault content with the Live Save, verbatim.
+
+    `content_dir` (`entries/<id>`) is always a directory, and the bound item lands *inside* it
+    under its own name: `entries/<id>/Skyrim/...` for a folder, `entries/<id>/settings.ini` for
+    a file. So the Vault mirrors what the user pointed at, and the wrapper is a directory the
+    sparse cone (ADR-0002) can select - a bare file at `entries/<id>` is one it would refuse.
 
     A symlinked save *folder* is followed - the user bound the folder it leads to - while
     symlinks *inside* the save are copied as links, exactly as the hashing scheme records
@@ -323,17 +328,32 @@ def _copy_into_vault(live: Path, destination: Path) -> None:
     """
     source = transaction.resolve_target(live)
 
-    if destination.is_dir() and not destination.is_symlink():
-        shutil.rmtree(destination)
+    # Reset the Entry directory to hold exactly one child, the bound item under its own name.
+    if content_dir.is_dir() and not content_dir.is_symlink():
+        shutil.rmtree(content_dir)
     else:
-        destination.unlink(missing_ok=True)
+        content_dir.unlink(missing_ok=True)
+    content_dir.mkdir(parents=True, exist_ok=True)
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
-    if source.is_dir():
-        shutil.copytree(source, destination, symlinks=True)
+    inner = content_dir / source.name
+    if source.is_dir() and not source.is_symlink():
+        shutil.copytree(source, inner, symlinks=True)
     else:
-        shutil.copy2(source, destination)
+        shutil.copy2(source, inner, follow_symlinks=False)
+
+
+def _content_name(live: Path) -> str | None:
+    """The basename to store the bound item under, `<name>` in `entries/<id>/<name>` - the
+    file's name, or the folder's. A Live Save that does not exist yet reads as `None` and is
+    corrected at the first Sync, which is the moment its name is first knowable."""
+    target = transaction.resolve_target(live)
+    return target.name if target.exists() else None
+
+
+def _content_source(paths: Paths, entry: Entry) -> TreeSource:
+    """The Vault content a Restore writes back over the Live Save: the bound file or folder
+    itself, at `entries/<id>/<content_name>` - never the sparse-cone wrapper around it."""
+    return TreeSource(entries.content_path(paths, entry))
 
 
 def sync_to_vault(
@@ -370,7 +390,13 @@ def sync_to_vault(
     try:
         _copy_into_vault(live, destination)
 
-        captured = content_hash(destination)  # is the copy faithful?
+        # The Sync is the moment the Live Save's name and shape are authoritative: record the
+        # basename so Restore, here or on any other Machine, rebuilds the right file or folder.
+        # The faithfulness check hashes the stored item itself (`entries/<id>/<name>`), which is
+        # what must equal the Live Save - never the sparse-cone wrapper around it.
+        entry.content_name = _content_name(live)
+
+        captured = content_hash(entries.content_path(paths, entry))  # is the copy faithful?
         after = content_hash(live)  # did the source hold still while we read it?
 
         if not (before == after == captured):
@@ -378,6 +404,8 @@ def sync_to_vault(
                 f"{live} changed while it was being copied, so nothing has been committed. "
                 "Close the game and try again."
             )
+
+        entries.write(paths, entry)  # persist content_name, staged and committed with the content
 
         if _stage(paths, entry_id):
             commit = _commit(
@@ -415,7 +443,7 @@ def sync_to_vault(
 
 def preview_restore(paths: Paths, the_ledger: Ledger, entry_id: str, reason: str = RESTORE):
     binding = the_ledger.require(entry_id)
-    source = TreeSource(paths.entry_content_dir(entry_id))
+    source = _content_source(paths, entries.require(paths, entry_id))
     return transaction.preview(paths, entry_id, binding.live, source, reason)
 
 
@@ -435,7 +463,7 @@ def restore_to_live(
     vault.ensure_clean(paths)
 
     binding = the_ledger.require(entry_id)
-    source = TreeSource(paths.entry_content_dir(entry_id))
+    source = _content_source(paths, entries.require(paths, entry_id))
 
     if source.digest() is None:
         raise transaction.LiveParentMissing(
@@ -595,14 +623,20 @@ def preview_rollback(paths: Paths, entry_id: str, sha: str) -> list[RollbackChan
     content = f"entries/{entry_id}"
     raw = git(paths).run("diff", "--no-renames", "--name-status", "HEAD", sha, "--", content)
 
-    prefix = f"{content}/"
+    # Show paths as the user sees the save - relative to its root, `entries/<id>/<name>/` - so a
+    # folder Entry's `saves/slot1.sav` reads as `slot1.sav`, and a file Entry simply as its name.
+    # The save-root prefix is tried before the bare wrapper, so folders strip the deeper one.
+    entry = entries.read(paths, entry_id)
+    roots = [f"{content}/{entry.content_name}/"] if entry and entry.content_name else []
+    roots.append(f"{content}/")
+
     found = []
     for line in raw.splitlines():
         if not line.strip():
             continue
         status, path = line.split("\t", 1)
         change = _STATUS_CHANGE.get(status[:1], transaction.Change.REPLACE)
-        shown = path[len(prefix) :] if path.startswith(prefix) else path
+        shown = next((path[len(root) :] for root in roots if path.startswith(root)), path)
         found.append(RollbackChange(path=shown, change=change))
     return sorted(found, key=lambda c: c.path)
 

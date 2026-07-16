@@ -128,12 +128,19 @@ def test_repointing_a_symlink_changes_the_hash(tmp_path):
 # --- files, directories, and absence ---------------------------------------------------
 
 
-def test_a_file_and_a_directory_never_collide(tmp_path):
+def test_a_single_file_hashes_as_its_one_file_directory(tmp_path):
+    """The load-bearing equality that makes single-file Entries work: a lone file is stored in
+    the Vault as `entries/<id>/<name>`, and it must hash identically to that one-file directory,
+    or a single-file Entry could never be In Sync with its own faithful copy. The name is part
+    of it - move the same bytes to a different name and the hash changes, exactly as inside any
+    directory."""
     single = tmp_path / "solo.sav"
     single.write_text("data", encoding="utf-8")
-    tree = make_tree(tmp_path / "tree", {"solo.sav": "data"})
+    same = make_tree(tmp_path / "same", {"solo.sav": "data"})
+    renamed = make_tree(tmp_path / "renamed", {"other.sav": "data"})
 
-    assert hash_entry(single) != hash_entry(tree)
+    assert hash_entry(single) == hash_entry(same)
+    assert hash_entry(single) != hash_entry(renamed)
 
 
 def test_a_single_file_entry_hashes(tmp_path):

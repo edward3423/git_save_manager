@@ -127,15 +127,6 @@ def directory_digest(members: Iterable[tuple[str, str]]) -> str:
     return digest.hexdigest()
 
 
-def file_digest(file_hash: str) -> str:
-    """Fold a single file's digest into an Entry digest. Never collides with a directory's."""
-    digest = hashlib.sha256()
-    digest.update(SCHEME)
-    digest.update(b"file")
-    digest.update(bytes.fromhex(file_hash))
-    return digest.hexdigest()
-
-
 def _walk_files(root: Path) -> list[tuple[str, Path]]:
     """Every file under `root`, as (relative posix path, absolute path), sorted by that path.
 
@@ -168,11 +159,15 @@ def hash_directory(path: Path, cache: HashCache | None = None) -> str:
 def hash_entry(path: Path, cache: HashCache | None = None) -> str:
     """Content hash of an Entry, whether it is a single file or a directory.
 
-    A file and a directory never collide, even with identical bytes: the kind is folded in.
+    A single file is hashed as the one-file directory it becomes in the Vault
+    (`entries/<id>/<name>`, ADR-0002 needs a directory for the sparse cone): its digest is
+    `directory_digest` over the one member `(name, file hash)`. So a Live Save that is a lone
+    file and its stored copy read as identical - which is the whole point, since otherwise a
+    single-file Entry could never be In Sync with its own faithful copy in the Vault.
     """
     if path.is_dir() and not path.is_symlink():
         return hash_directory(path, cache)
-    return file_digest(hash_file(path, cache))
+    return directory_digest([(path.name, hash_file(path, cache))])
 
 
 def content_hash(path: Path, cache: HashCache | None = None) -> str | None:
