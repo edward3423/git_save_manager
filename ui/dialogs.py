@@ -13,6 +13,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QDialog,
@@ -28,14 +29,17 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QStyle,
+    QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
 
-from core import backups, cloud, github, operations, redo, vault
+from core import backups, cloud, github, ledger, operations, redo, vault
 from core.backups import Backup
 from core.cloud import Side
 from core.credentials import CredentialStore
+from core.entry_state import EntryState
 from core.git import GitError, GitTimeout
 from core.logger import log
 from core.startup import App
@@ -508,6 +512,45 @@ def run_redo(app: App, store: CredentialStore, parent: QWidget) -> bool:
 # --- history, backups, machines, the log --------------------------------------------------------
 
 
+class _RowColorDelegate(QStyledItemDelegate):
+    """Paint each row's own Background/Foreground brush.
+
+    Qt drops a model's per-item brushes the moment a `QListWidget::item` stylesheet rule
+    exists (as the app theme has one), so `setBackground`/`setForeground` are otherwise
+    silently ignored and every row falls back to the theme colour. This draws the row itself -
+    selection, per-row background, per-row text colour - restoring those brushes.
+    """
+
+    _SELECTED_BG = QColor("#4f8cc9")
+    _SELECTED_FG = QColor("#ffffff")
+    _DEFAULT_FG = QColor("#d6d8dc")
+
+    def paint(self, painter, option, index):  # noqa: ANN001 - Qt override
+        painter.save()
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, self._SELECTED_BG)
+            pen = self._SELECTED_FG
+        else:
+            background = index.data(Qt.ItemDataRole.BackgroundRole)
+            if background is not None:
+                painter.fillRect(option.rect, background.color())
+            foreground = index.data(Qt.ItemDataRole.ForegroundRole)
+            pen = foreground.color() if foreground is not None else self._DEFAULT_FG
+        painter.setPen(pen)
+        text_rect = option.rect.adjusted(8, 0, -8, 0)  # the QSS item padding, kept
+        painter.drawText(
+            text_rect,
+            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+            index.data(Qt.ItemDataRole.DisplayRole),
+        )
+        painter.restore()
+
+    def sizeHint(self, option, index):  # noqa: ANN001 - Qt override
+        size = super().sizeHint(option, index)
+        size.setHeight(size.height() + 10)  # match the theme's roomy item padding
+        return size
+
+
 class HistoryDialog(QDialog):
     """Every commit that touched this Entry, and Rollback as a forward commit."""
 
@@ -521,29 +564,60 @@ class HistoryDialog(QDialog):
 
         self.commits = operations.history(app.paths, entry_id)
         unpushed = operations.unpushed_commits(app.paths)
+
+        # The Live Save's standing against the Vault, when this Entry is bound here: In Sync
+        # highlights the current commit, Local Ahead shows an uncommitted row above it all.
+        state = None
+        if app.the_ledger.is_bound(entry_id):
+            state = ledger.refresh(app.paths, app.the_ledger, entry_id).state
+        in_sync = state is EntryState.IN_SYNC
+        local_ahead = state is EntryState.LOCAL_AHEAD
+        current = self.commits[0] if self.commits else None
+
+        # One slot per list row, holding the Commit it represents - or None for the synthetic
+        # "uncommitted" row, which is not a commit and so can never be a Rollback target.
+        self.rows: list[operations.Commit | None] = []
         self.listing = QListWidget()
+        self.listing.setItemDelegate(_RowColorDelegate(self.listing))
+
+        if local_ahead:
+            uncommitted = QListWidgetItem(
+                "[uncommitted]  the Live Save has changes not yet Synced to the Vault"
+            )
+            uncommitted.setForeground(QColor("#e5484d"))
+            self.listing.addItem(uncommitted)
+            self.rows.append(None)
+
         for commit in self.commits:
             message = f" {commit.body} " if commit.body else ""
             ahead = commit.sha in unpushed
-            # A leading [unpushed] tag marks the local-ahead commits without relying on colour
-            # alone; pushed rows carry no tag, so everything sits flush left rather than padded.
-            marker = "[unpushed] " if ahead else ""
+            is_current = commit is current
+            # Tags sit on the left, without relying on colour alone: [unpushed] for a commit the
+            # Cloud Vault lacks, [current] for the version the Vault holds now.
+            tags = ("[unpushed] " if ahead else "") + ("[current] " if is_current else "")
             item = QListWidgetItem(
-                f"{marker}{commit.when:%Y-%m-%d %H:%M} |{message}| "
+                f"{tags}{commit.when:%Y-%m-%d %H:%M} |{message}| "
                 f"{commit.machine} | {commit.subject} | [{commit.short}]"
             )
-            if ahead:
+            if is_current and in_sync:
+                # In Sync: the Live Save matches this commit exactly. Colour the text orange.
+                item.setForeground(QColor("#f5a623"))
+                item.setToolTip("In Sync: the Live Save matches this commit.")
+            elif ahead:
                 item.setForeground(QColor("#3d8bfd"))
                 item.setToolTip("Local Ahead: this commit has not been pushed to the Cloud Vault.")
             self.listing.addItem(item)
+            self.rows.append(commit)
 
-        rollback = QPushButton("Roll back to selected...")
-        rollback.clicked.connect(self.run_rollback)
+        self.rollback_button = QPushButton("Roll back to selected...")
+        self.rollback_button.setEnabled(False)  # nothing selected yet
+        self.rollback_button.clicked.connect(self.run_rollback)
+        self.listing.currentRowChanged.connect(self._refresh_rollback_enabled)
         close = QPushButton("Close")
         close.clicked.connect(self.reject)
 
         row = QHBoxLayout()
-        row.addWidget(rollback)
+        row.addWidget(self.rollback_button)
         row.addStretch()
         row.addWidget(close)
 
@@ -551,11 +625,21 @@ class HistoryDialog(QDialog):
         layout.addWidget(self.listing)
         layout.addLayout(row)
 
-    def run_rollback(self) -> None:
+    def _selected_commit(self) -> operations.Commit | None:
         index = self.listing.currentRow()
-        if index < 0:
+        return self.rows[index] if 0 <= index < len(self.rows) else None
+
+    def _refresh_rollback_enabled(self) -> None:
+        """Rollback is offered only for an *older* commit: never the uncommitted row (not a
+        commit), and never the current one (rolling back to where the Vault already is)."""
+        commit = self._selected_commit()
+        current = self.commits[0] if self.commits else None
+        self.rollback_button.setEnabled(commit is not None and commit is not current)
+
+    def run_rollback(self) -> None:
+        commit = self._selected_commit()
+        if commit is None or (self.commits and commit is self.commits[0]):
             return
-        commit = self.commits[index]
 
         changes = operations.preview_rollback(self.app.paths, self.entry_id, commit.sha)
         if not changes:
