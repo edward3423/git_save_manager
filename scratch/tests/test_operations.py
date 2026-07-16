@@ -102,6 +102,21 @@ def test_an_oversized_file_is_refused_at_add_not_at_push(
         )
 
 
+def test_a_folder_that_is_a_git_repo_is_refused_at_add(
+    paths, config, description, the_ledger, tmp_path
+):
+    """Git collapses a repository nested inside the Vault to an empty submodule reference, so a
+    Sync would commit a gitlink and save none of the files. Refuse it before the Entry exists."""
+    repo = tmp_path / "config"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "settings.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(operations.GitRepoNotAllowed):
+        operations.add_entry(paths, config, description, the_ledger, "Config", repo)
+
+    assert not paths.entries_dir.exists() or not any(paths.entries_dir.glob("*.json"))
+
+
 # --- Sync: Live -> Vault -------------------------------------------------------------------------
 
 

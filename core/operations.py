@@ -74,6 +74,11 @@ class NothingToSync(Exception):
     """The Live Save holds no content. Syncing would commit its absence and empty the Entry."""
 
 
+class GitRepoNotAllowed(Exception):
+    """The chosen folder is itself a Git repository, which the Vault cannot store: Git collapses
+    a repository nested inside it to an empty submodule reference rather than tracking its files."""
+
+
 # --- commits carry the Machine that made them ---------------------------------------------
 
 
@@ -155,6 +160,13 @@ def add_entry(
     vault.ensure_clean(paths)
 
     target = transaction.resolve_target(live_path)
+    if target.is_dir() and (target / ".git").exists():
+        raise GitRepoNotAllowed(
+            f"{target.name} is a Git repository - it contains a .git. The Vault keeps saves in "
+            "Git, and Git cannot store a repository inside itself: it would be reduced to an "
+            "empty submodule reference, and none of the files would be saved. Choose a folder "
+            "that is not a repository, or point at the specific files you want to keep."
+        )
     oversized = vault.oversized_files(target, limit=max_file_bytes)
     if oversized:
         biggest = oversized[0]
