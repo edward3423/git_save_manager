@@ -272,6 +272,12 @@ class AddEntryDialog(QDialog):
         except (vault.FileTooLarge, OSError) as error:
             _fail(self, "Add Entry", error)
             return
+        QMessageBox.information(
+            self,
+            "Add Entry",
+            f"{name} was created, but no save data has been copied into the Vault yet. "
+            "Adding an Entry only records where the save lives; Sync is what captures it.",
+        )
         self.accept()
 
 
