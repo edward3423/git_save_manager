@@ -183,6 +183,20 @@ def redo_lines(plan: redo.Plan) -> list[str]:
     return found
 
 
+def bind_target_is_file(paths: Paths, entry_id: str) -> bool:
+    """Whether binding this Entry means pointing at a single file rather than a folder.
+
+    Read from the Vault content it already holds, so a save that lives as one file (a lone
+    `.sav`, a `settings.ini`) lets the Bind dialog skip straight to a file picker instead of
+    first asking folder-or-file. An Entry with no content yet reads as False - either shape is
+    still possible, so the choice stays open.
+    """
+    entry = entries.read(paths, entry_id)
+    if entry is None or entry.content_name is None:
+        return False
+    return vault.content_is_file(paths, entry_id, entry.content_name)
+
+
 def bind_hints(paths: Paths, config: Config, entry_id: str) -> list[str]:
     """Where the *other* Machines keep this save - read-only, never acted on.
 

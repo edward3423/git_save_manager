@@ -183,6 +183,43 @@ def test_bind_hints_cite_other_machines_but_never_this_one(machine):
     assert hints == ["desktop (Windows): D:/GameSaves/EldenRing"]  # never our own binding
 
 
+def test_a_single_file_entry_is_bound_as_a_file(machine):
+    """A save that lives as one file lets the Bind dialog skip the folder-or-file question -
+    there is no folder to point at."""
+    paths, config, description = machine
+    the_ledger = Ledger()
+    live = paths.root / "live" / "settings.ini"
+    live.parent.mkdir(parents=True)
+    live.write_text("volume=11", encoding="utf-8")
+    entry = operations.add_entry(paths, config, description, the_ledger, "Doom", live)
+    operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
+
+    assert presenter.bind_target_is_file(paths, entry.entry_id) is True
+
+
+def test_a_folder_entry_still_offers_the_choice(machine):
+    paths, config, description = machine
+    the_ledger = Ledger()
+    live = paths.root / "live" / "Elden Ring"
+    live.mkdir(parents=True)
+    (live / "slot1.sav").write_text("progress", encoding="utf-8")
+    entry = operations.add_entry(paths, config, description, the_ledger, "Elden Ring", live)
+    operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
+
+    assert presenter.bind_target_is_file(paths, entry.entry_id) is False
+
+
+def test_an_entry_with_no_content_yet_leaves_the_shape_open(machine):
+    """No Sync has revealed the save's shape, so neither a file nor a folder can be assumed."""
+    paths, config, description = machine
+    the_ledger = Ledger()
+    never = paths.root / "live" / "not-here-yet"
+    entry = operations.add_entry(paths, config, description, the_ledger, "Hollow Knight", never)
+
+    assert entry.content_name is None
+    assert presenter.bind_target_is_file(paths, entry.entry_id) is False
+
+
 def test_the_redo_confirmation_enumerates_every_deletion_and_what_survives(machine):
     """Plan Section 4: the confirmation enumerates every path and keyring entry it will
     delete - and says out loud what it will never touch."""
