@@ -205,21 +205,31 @@ def _pick_file(parent: QWidget, title: str) -> Path | None:
     return Path(found) if found else None
 
 
-def _browse_button(parent: QWidget, target: QLineEdit, title: str) -> QPushButton:
+def _browse_button(
+    parent: QWidget, target: QLineEdit, title: str, *, file_only: bool = False
+) -> QPushButton:
     """A Browse button that points `target` at a folder *or* a single file.
 
     A save is sometimes a directory and sometimes one file (a lone `.md`, an `.sav`), and the
     whole add/bind path downstream treats either the same. The native directory picker refuses
     files outright, so the choice is offered explicitly rather than guessed.
+
+    `file_only` collapses that choice to a plain file picker, for when the save's shape is
+    already known to be a single file - binding an Entry whose Vault content is one file. There
+    is no folder to ask about, so the menu would only offer a wrong answer.
     """
     button = QPushButton("Browse...")
-    menu = QMenu(button)
 
     def fill(picker: Callable[[QWidget, str], Path | None]) -> None:
         found = picker(parent, title)
         if found is not None:
             target.setText(str(found))
 
+    if file_only:
+        button.clicked.connect(lambda: fill(_pick_file))
+        return button
+
+    menu = QMenu(button)
     menu.addAction("Folder...", lambda: fill(_pick_directory))
     menu.addAction("File...", lambda: fill(_pick_file))
     button.setMenu(menu)
@@ -311,9 +321,16 @@ class BindDialog(QDialog):
         )
         hint_label.setWordWrap(True)
 
+        file_only = presenter.bind_target_is_file(app.paths, entry_id)
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("where this Machine keeps (or will keep) the save")
-        browse = _browse_button(self, self.path_edit, "Where does this Machine keep the save?")
+        self.path_edit.setPlaceholderText(
+            "where this Machine keeps (or will keep) the file"
+            if file_only
+            else "where this Machine keeps (or will keep) the save"
+        )
+        browse = _browse_button(
+            self, self.path_edit, "Where does this Machine keep the save?", file_only=file_only
+        )
 
         path_row = QHBoxLayout()
         path_row.addWidget(self.path_edit)

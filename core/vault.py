@@ -343,6 +343,20 @@ def oversized_files(root: Path, limit: int = MAX_SINGLE_FILE_BYTES) -> list[TooL
     return sorted(found, key=lambda f: f.size_bytes, reverse=True)
 
 
+def content_is_file(paths: Paths, entry_id: str, content_name: str) -> bool:
+    """Whether an Entry's committed content is a single file rather than a folder.
+
+    Reads the tree object, so it answers correctly even for an Entry this Machine has never
+    checked out: a `blob:none` clone still holds every tree, and `ls-tree` walks trees without
+    ever fetching a blob. A file (or a symlinked file) is a `blob`; a folder is a `tree`. An
+    Entry with no committed content yet - never Synced on any Machine - has no such object and
+    reads as False, so the caller keeps offering both a folder and a file.
+    """
+    line = git(paths).run("ls-tree", "HEAD", "--", f"entries/{entry_id}/{content_name}").strip()
+    # "<mode> <type> <sha>\t<path>": the type is blob for a file, tree for a folder.
+    return bool(line) and line.split()[1] == "blob"
+
+
 def vault_size_bytes(paths: Paths) -> int:
     """How much disk the Vault occupies, history included. Shown in the status area."""
     if not paths.vault_dir.exists():
