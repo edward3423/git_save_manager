@@ -45,3 +45,42 @@ squash-merged once lint and tests pass.
 
 The tests are headless: real Git repositories in temp directories, a second Machine
 simulated by cloning. No network, no GitHub, no PyQt, no games.
+
+## Troubleshooting (Linux)
+
+### `Could not load the Qt platform plugin "xcb"`
+
+Qt 6.5+ needs the X11 cursor library, which many distros don't ship by default:
+
+```bash
+sudo apt install -y libxcb-cursor0
+```
+
+If it still fails, install the wider xcb set:
+
+```bash
+sudo apt install -y libxcb-cursor0 libxcb-xinerama0 libxcb-icccm4 \
+                    libxcb-image0 libxcb-keysyms1 libxcb-render-util0
+```
+
+On Wayland you can skip X11 entirely: `QT_QPA_PLATFORM=wayland uv run main.py`.
+
+### The app hangs at startup, or crashes with a `secretstorage` / D-Bus error
+
+The PAT is stored in the OS keyring (see [`core/credentials.py`](core/credentials.py) - it is
+kept nowhere else). If your login keyring was never unlocked, there is no default Secret
+Service collection, and the keyring library blocks trying to create one behind a D-Bus prompt.
+The traceback ends in `secretstorage` /`jeepney` with
+`Object does not exist at path .../collection/login`.
+
+Create a default keyring with an **empty password** so it auto-unlocks at every login:
+
+1. Open **Passwords and Keys** (`seahorse`).
+2. If a stale keyring file exists but no keyring is listed, move it aside first:
+   `mv ~/.local/share/keyrings/login.keyring{,.bak}`
+3. Click **`+`** → **Password Keyring**, name it **`Login`**, and leave the password **blank**
+   (confirm *Use Unsafe Storage*).
+4. Right-click the new **Login** keyring → **Set as default**.
+
+Restart the app. An empty-password keyring unlocks automatically, so there are no further
+prompts.
