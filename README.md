@@ -4,6 +4,42 @@ A desktop app that manages game saves and application settings by versioning the
 repository backed by a private GitHub remote, so the same files can be carried between
 machines with history and rollback.
 
+## Install
+
+Linux and macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EdwardRusli/git_save_manager/main/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/EdwardRusli/git_save_manager/main/install.ps1 | iex
+```
+
+Either script installs uv if needed, clones the app, syncs its dependencies, and creates a
+`git-save-manager` launcher plus a menu entry - a `.desktop` file on Linux, an app bundle in
+`~/Applications` on macOS, a Start Menu shortcut on Windows. Neither installs system packages
+for you: they detect what is missing and print the exact command to run. On Linux that is the
+Qt xcb library and a keyring, listed under [Troubleshooting](#troubleshooting-linux); on macOS
+the Xcode command line tools; on Windows only Git, since PyQt6 ships its own Qt plugin and the
+token goes to the Windows Credential Manager.
+
+Default locations:
+
+| | Checkout | Launcher |
+| --- | --- | --- |
+| Linux, macOS | `~/.local/share/git-save-manager` | `~/.local/bin/git-save-manager` |
+| Windows | `%LOCALAPPDATA%\Programs\git-save-manager` | `%LOCALAPPDATA%\Programs\bin\git-save-manager.cmd` |
+
+To **update**, run the exact same command. It fetches the latest `main` and re-syncs
+dependencies in place; your `data/` directory, including the Vault, is untouched.
+
+Overrides: `PREFIX` (`GSM_PREFIX` on Windows) to install somewhere else, `GSM_REF` to track a
+different branch or tag, `GSM_NO_DESKTOP=1` (`GSM_NO_SHORTCUT=1` on Windows) to skip the menu
+entry.
+
 ## Design
 
 Read these before changing anything:
