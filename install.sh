@@ -3,7 +3,7 @@
 # Git Save Manager - installer and updater for Linux and macOS.
 # Windows has its own script: install.ps1.
 #
-#   curl -fsSL https://raw.githubusercontent.com/EdwardRusli/git_save_manager/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/edward3423/git_save_manager/main/install.sh | bash
 #
 # Running it again updates an existing install in place. It is safe to pipe from curl:
 # nothing is read from stdin and nothing prompts.
@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-REPO_DEFAULT="https://github.com/EdwardRusli/git_save_manager.git"
+REPO_DEFAULT="https://github.com/edward3423/git_save_manager.git"
 
 PREFIX="${PREFIX:-$HOME/.local}"
 GSM_HOME="${GSM_HOME:-$PREFIX/share/git-save-manager}"

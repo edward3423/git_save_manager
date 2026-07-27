@@ -1,6 +1,6 @@
 # Git Save Manager - installer and updater for Windows.
 #
-#   irm https://raw.githubusercontent.com/EdwardRusli/git_save_manager/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/edward3423/git_save_manager/main/install.ps1 | iex
 #
 # Running it again updates an existing install in place. Nothing is read from the console
 # and nothing prompts, so it is safe to pipe.
@@ -36,7 +36,7 @@ if ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows) {
     Die "This script is for Windows. On Linux and macOS use install.sh."
 }
 
-$RepoDefault = 'https://github.com/EdwardRusli/git_save_manager.git'
+$RepoDefault = 'https://github.com/edward3423/git_save_manager.git'
 $Prefix   = Env-Or 'GSM_PREFIX' (Join-Path $env:LOCALAPPDATA 'Programs')
 $GsmHome  = Env-Or 'GSM_HOME'   (Join-Path $Prefix 'git-save-manager')
 $GsmRepo  = Env-Or 'GSM_REPO'   $RepoDefault

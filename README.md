@@ -9,13 +9,13 @@ machines with history and rollback.
 Linux and macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/EdwardRusli/git_save_manager/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/edward3423/git_save_manager/main/install.sh | bash
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/EdwardRusli/git_save_manager/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/edward3423/git_save_manager/main/install.ps1 | iex
 ```
 
 Either script installs uv if needed, clones the app, syncs its dependencies, and creates a
