@@ -11,13 +11,14 @@
 # Environment overrides (all optional):
 #   PREFIX      install root, default $HOME/.local
 #               -> checkout at $PREFIX/share/git-save-manager
-#               -> launcher at $PREFIX/bin/git-save-manager
+#               -> launcher at $PREFIX/bin/gsm
 #               -> desktop entry at $PREFIX/share/applications (Linux)
 #   GSM_HOME    override the checkout location on its own
 #   GSM_REPO    clone URL, default the public GitHub repository
 #   GSM_REF     branch or tag to track, default main
 #   GSM_APP_DIR macOS app bundle location, default $HOME/Applications
 #   GSM_NO_DESKTOP=1   skip the .desktop entry / .app bundle
+#   GSM_NO_PATH=1      do not touch the shell profile to put the launcher on PATH
 
 set -euo pipefail
 
@@ -29,7 +30,7 @@ GSM_REPO="${GSM_REPO:-$REPO_DEFAULT}"
 GSM_REF="${GSM_REF:-main}"
 BIN_DIR="$PREFIX/bin"
 DESKTOP_DIR="$PREFIX/share/applications"
-LAUNCHER="$BIN_DIR/git-save-manager"
+LAUNCHER="$BIN_DIR/gsm"
 
 say()  { printf '==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -208,18 +209,59 @@ cat > "$LAUNCHER" <<EOF
 set -euo pipefail
 UV="$UV"
 [ -x "\$UV" ] || UV="\$(command -v uv)" || {
-    echo "git-save-manager: uv not found. Re-run the installer." >&2
+    echo "gsm: uv not found. Re-run the installer." >&2
     exit 1
 }
 exec "\$UV" run --project "$GSM_HOME" --directory "$GSM_HOME" python main.py "\$@"
 EOF
 chmod +x "$LAUNCHER"
 
+# --- PATH -------------------------------------------------------------------
+#
+# `gsm` is only a command if its directory is on PATH, so put it there rather than
+# printing an instruction and hoping. The export line is appended to the profile of the
+# shell in use, guarded by a marker so re-running the installer never appends twice.
+
+MARKER="# added by the Git Save Manager installer"
+
+profile_for_shell() {
+    case "$(basename "${SHELL:-/bin/sh}")" in
+        zsh)  printf '%s\n' "$HOME/.zshrc" ;;
+        fish) printf '%s\n' "$HOME/.config/fish/config.fish" ;;
+        bash)
+            # macOS login shells read .bash_profile; Linux terminals read .bashrc.
+            if [ "$OS" = macos ] && [ -f "$HOME/.bash_profile" ]; then
+                printf '%s\n' "$HOME/.bash_profile"
+            else
+                printf '%s\n' "$HOME/.bashrc"
+            fi
+            ;;
+        *) printf '%s\n' "$HOME/.profile" ;;
+    esac
+}
+
 case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
+    *":$BIN_DIR:"*)
+        say "$BIN_DIR is already on your PATH"
+        ;;
     *)
-        warn "$BIN_DIR is not on your PATH. Add this to your shell profile:"
-        warn "  export PATH=\"$BIN_DIR:\$PATH\""
+        if [ "${GSM_NO_PATH:-0}" = "1" ]; then
+            warn "$BIN_DIR is not on your PATH. Add this yourself:"
+            warn "  export PATH=\"$BIN_DIR:\$PATH\""
+        else
+            PROFILE="$(profile_for_shell)"
+            if [ -f "$PROFILE" ] && grep -qF "$MARKER" "$PROFILE"; then
+                say "PATH entry is already in $PROFILE"
+            else
+                say "Adding $BIN_DIR to your PATH in $PROFILE"
+                mkdir -p "$(dirname "$PROFILE")"
+                case "$PROFILE" in
+                    *config.fish) printf '\n%s\nfish_add_path %s\n' "$MARKER" "$BIN_DIR" >> "$PROFILE" ;;
+                    *)            printf '\n%s\nexport PATH="%s:$PATH"\n' "$MARKER" "$BIN_DIR" >> "$PROFILE" ;;
+                esac
+            fi
+            warn "open a new terminal, or run: export PATH=\"$BIN_DIR:\$PATH\""
+        fi
         ;;
 esac
 
@@ -238,7 +280,7 @@ if [ "${GSM_NO_DESKTOP:-0}" != "1" ] && [ "$OS" = macos ]; then
 <dict>
     <key>CFBundleName</key><string>Git Save Manager</string>
     <key>CFBundleDisplayName</key><string>Git Save Manager</string>
-    <key>CFBundleIdentifier</key><string>com.github.edwardrusli.git-save-manager</string>
+    <key>CFBundleIdentifier</key><string>com.github.edward3423.git-save-manager</string>
     <key>CFBundleExecutable</key><string>git-save-manager</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleVersion</key><string>0.1.0</string>
@@ -273,5 +315,5 @@ fi
 # --- done -------------------------------------------------------------------
 
 say "Done."
-say "Launch with: git-save-manager"
+say "Launch with: gsm"
 say "Update later by re-running the same install command."

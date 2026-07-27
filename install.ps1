@@ -8,7 +8,7 @@
 # Environment overrides (all optional, set before running):
 #   $env:GSM_PREFIX       install root, default $env:LOCALAPPDATA\Programs
 #                         -> checkout at <prefix>\git-save-manager
-#                         -> launcher at <prefix>\bin\git-save-manager.cmd
+#                         -> launcher at <prefix>\bin\gsm.cmd
 #   $env:GSM_HOME         override the checkout location on its own
 #   $env:GSM_REPO         clone URL, default the public GitHub repository
 #   $env:GSM_REF          branch or tag to track, default main
@@ -42,7 +42,7 @@ $GsmHome  = Env-Or 'GSM_HOME'   (Join-Path $Prefix 'git-save-manager')
 $GsmRepo  = Env-Or 'GSM_REPO'   $RepoDefault
 $GsmRef   = Env-Or 'GSM_REF'    'main'
 $BinDir   = Join-Path $Prefix 'bin'
-$Launcher = Join-Path $BinDir 'git-save-manager.cmd'
+$Launcher = Join-Path $BinDir 'gsm.cmd'
 
 Say "Installing to $GsmHome"
 
@@ -147,10 +147,10 @@ if ((Env-Or 'GSM_NO_PATH' '0') -ne '1') {
         Say "Adding $BinDir to your user PATH"
         $newPath = if ($userPath.TrimEnd(';') -eq '') { $BinDir } else { $userPath.TrimEnd(';') + ';' + $BinDir }
         [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-        Warn "Open a new terminal before the 'git-save-manager' command is available."
+        Warn "Open a new terminal before the 'gsm' command is available."
     }
 } elseif (($env:Path -split ';') -notcontains $BinDir) {
-    Warn "$BinDir is not on your PATH. Add it manually to use the 'git-save-manager' command."
+    Warn "$BinDir is not on your PATH. Add it manually to use the 'gsm' command."
 }
 
 # --- Start Menu shortcut ----------------------------------------------------
@@ -176,5 +176,5 @@ if ((Env-Or 'GSM_NO_SHORTCUT' '0') -ne '1') {
 # --- done -------------------------------------------------------------------
 
 Say "Done."
-Say "Launch with: git-save-manager   (or the Start Menu entry)"
+Say "Launch with: gsm   (or the Start Menu entry)"
 Say "Update later by re-running the same install command."

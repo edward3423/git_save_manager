@@ -18,8 +18,14 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/edward3423/git_save_manager/main/install.ps1 | iex
 ```
 
-Either script installs uv if needed, clones the app, syncs its dependencies, and creates a
-`git-save-manager` launcher plus a menu entry - a `.desktop` file on Linux, an app bundle in
+Then open a new terminal and run:
+
+```
+gsm
+```
+
+Either script installs uv if needed, clones the app, syncs its dependencies, puts a `gsm`
+launcher on your PATH, and adds a menu entry - a `.desktop` file on Linux, an app bundle in
 `~/Applications` on macOS, a Start Menu shortcut on Windows. Neither installs system packages
 for you: they detect what is missing and print the exact command to run. On Linux that is the
 Qt xcb library and a keyring, listed under [Troubleshooting](#troubleshooting-linux); on macOS
@@ -30,15 +36,20 @@ Default locations:
 
 | | Checkout | Launcher |
 | --- | --- | --- |
-| Linux, macOS | `~/.local/share/git-save-manager` | `~/.local/bin/git-save-manager` |
-| Windows | `%LOCALAPPDATA%\Programs\git-save-manager` | `%LOCALAPPDATA%\Programs\bin\git-save-manager.cmd` |
+| Linux, macOS | `~/.local/share/git-save-manager` | `~/.local/bin/gsm` |
+| Windows | `%LOCALAPPDATA%\Programs\git-save-manager` | `%LOCALAPPDATA%\Programs\bin\gsm.cmd` |
+
+If the launcher directory is not already on your PATH, the installer adds it: an `export PATH`
+line in your shell profile (`.zshrc`, `.bashrc`, or `.profile`, matching `$SHELL`) on Linux and
+macOS, the user PATH environment variable on Windows. Either way `gsm` works in a **new**
+terminal. Set `GSM_NO_PATH=1` to be left alone.
 
 To **update**, run the exact same command. It fetches the latest `main` and re-syncs
 dependencies in place; your `data/` directory, including the Vault, is untouched.
 
 Overrides: `PREFIX` (`GSM_PREFIX` on Windows) to install somewhere else, `GSM_REF` to track a
 different branch or tag, `GSM_NO_DESKTOP=1` (`GSM_NO_SHORTCUT=1` on Windows) to skip the menu
-entry.
+entry, `GSM_NO_PATH=1` to skip the PATH change.
 
 ## Design
 
