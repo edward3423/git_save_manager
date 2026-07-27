@@ -206,7 +206,7 @@ def _pick_file(parent: QWidget, title: str) -> Path | None:
 
 
 def _browse_button(
-    parent: QWidget, target: QLineEdit, title: str, *, file_only: bool = False
+    parent: QWidget, target: QLineEdit, title: str, *, folder_only: bool = False
 ) -> QPushButton:
     """A Browse button that points `target` at a folder *or* a single file.
 
@@ -214,9 +214,10 @@ def _browse_button(
     whole add/bind path downstream treats either the same. The native directory picker refuses
     files outright, so the choice is offered explicitly rather than guessed.
 
-    `file_only` collapses that choice to a plain file picker, for when the save's shape is
-    already known to be a single file - binding an Entry whose Vault content is one file. There
-    is no folder to ask about, so the menu would only offer a wrong answer.
+    `folder_only` collapses that choice to a plain directory picker, for when the caller already
+    knows the file name and only needs the folder to put it in - see `BindDialog`. The directory
+    picker is also the only one that can name a place that does not exist yet, via its own New
+    Folder button; the file pickers can only open a file that is already there.
     """
     button = QPushButton("Browse...")
 
@@ -225,8 +226,8 @@ def _browse_button(
         if found is not None:
             target.setText(str(found))
 
-    if file_only:
-        button.clicked.connect(lambda: fill(_pick_file))
+    if folder_only:
+        button.clicked.connect(lambda: fill(_pick_directory))
         return button
 
     menu = QMenu(button)
@@ -321,15 +322,22 @@ class BindDialog(QDialog):
         )
         hint_label.setWordWrap(True)
 
-        file_only = presenter.bind_target_is_file(app.paths, entry_id)
+        # A single-file save is bound as folder + the name the Vault already holds: the file
+        # usually does not exist here yet, and a file picker can only open one that does.
+        self.file_name = presenter.bind_file_name(app.paths, entry_id)
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText(
-            "where this Machine keeps (or will keep) the file"
-            if file_only
+            "the folder this Machine keeps (or will keep) the file in"
+            if self.file_name
             else "where this Machine keeps (or will keep) the save"
         )
         browse = _browse_button(
-            self, self.path_edit, "Where does this Machine keep the save?", file_only=file_only
+            self,
+            self.path_edit,
+            "Which folder does this Machine keep the file in?"
+            if self.file_name
+            else "Where does this Machine keep the save?",
+            folder_only=bool(self.file_name),
         )
 
         path_row = QHBoxLayout()
@@ -344,14 +352,54 @@ class BindDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(hint_label)
+        if self.file_name:
+            shape_label = QLabel(
+                f"This save is a single file named {self.file_name}. Choose the folder this "
+                "Machine keeps it in - the name is kept as it is."
+            )
+            shape_label.setWordWrap(True)
+            layout.addWidget(shape_label)
         layout.addLayout(path_row)
+        if self.file_name:
+            # The full path is derived, not typed, so it is shown rather than made editable.
+            self.preview_label = QLabel()
+            self.preview_label.setObjectName("bindPreview")
+            self.preview_label.setWordWrap(True)
+            self.path_edit.textChanged.connect(self._refresh_preview)
+            self._refresh_preview()
+            layout.addWidget(self.preview_label)
         layout.addWidget(buttons)
 
-    def run_bind(self) -> None:
+    def _refresh_preview(self) -> None:
+        chosen = self.chosen_path()
+        self.preview_label.setText(
+            f"Live Save: {chosen}" if chosen else "Live Save: (choose a folder above)"
+        )
+
+    def chosen_path(self) -> Path | None:
+        """The Live Save path this dialog would bind, or None while nothing is chosen."""
         raw = self.path_edit.text().strip()
         if not raw:
+            return None
+        return Path(raw) / self.file_name if self.file_name else Path(raw)
+
+    def run_bind(self) -> None:
+        raw = self.chosen_path()
+        if raw is None:
             QMessageBox.warning(self, "Bind", "A path is needed.")
             return
+        if self.file_name and raw.exists():
+            # Both cases are legitimate: the save is already here and is being adopted, or it is
+            # a stale copy about to be replaced. Say which way the data will move, and go on.
+            answer = QMessageBox.question(
+                self,
+                "Bind",
+                f"{raw} already exists.\n\nBinding does not move any data. Afterwards, Sync "
+                "uploads this file to the Vault and Restore overwrites it with the Vault's "
+                "copy.\n\nBind here anyway?",
+            )
+            if answer is not QMessageBox.StandardButton.Yes:
+                return
         try:
             operations.bind_entry(
                 self.app.paths,
@@ -359,7 +407,7 @@ class BindDialog(QDialog):
                 self.app.description,
                 self.app.the_ledger,
                 self.entry_id,
-                Path(raw),
+                raw,
                 pat=self.pat,
             )
         except OSError as error:

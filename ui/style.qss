@@ -84,6 +84,12 @@ QLineEdit:focus {
     border-color: #4f8cc9;
 }
 
+QLabel#bindPreview {
+    color: #a8adb7;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    padding-top: 2px;
+}
+
 QPlainTextEdit#console {
     background: #16171a;
     color: #a8adb7;

@@ -184,8 +184,8 @@ def test_bind_hints_cite_other_machines_but_never_this_one(machine):
 
 
 def test_a_single_file_entry_is_bound_as_a_file(machine):
-    """A save that lives as one file lets the Bind dialog skip the folder-or-file question -
-    there is no folder to point at."""
+    """A save that lives as one file lets the Bind dialog ask only for the containing folder,
+    and append the name the Vault already holds."""
     paths, config, description = machine
     the_ledger = Ledger()
     live = paths.root / "live" / "settings.ini"
@@ -194,7 +194,7 @@ def test_a_single_file_entry_is_bound_as_a_file(machine):
     entry = operations.add_entry(paths, config, description, the_ledger, "Doom", live)
     operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
 
-    assert presenter.bind_target_is_file(paths, entry.entry_id) is True
+    assert presenter.bind_file_name(paths, entry.entry_id) == "settings.ini"
 
 
 def test_a_folder_entry_still_offers_the_choice(machine):
@@ -206,7 +206,7 @@ def test_a_folder_entry_still_offers_the_choice(machine):
     entry = operations.add_entry(paths, config, description, the_ledger, "Elden Ring", live)
     operations.sync_to_vault(paths, config, description, the_ledger, entry.entry_id)
 
-    assert presenter.bind_target_is_file(paths, entry.entry_id) is False
+    assert presenter.bind_file_name(paths, entry.entry_id) is None
 
 
 def test_an_entry_with_no_content_yet_leaves_the_shape_open(machine):
@@ -217,7 +217,7 @@ def test_an_entry_with_no_content_yet_leaves_the_shape_open(machine):
     entry = operations.add_entry(paths, config, description, the_ledger, "Hollow Knight", never)
 
     assert entry.content_name is None
-    assert presenter.bind_target_is_file(paths, entry.entry_id) is False
+    assert presenter.bind_file_name(paths, entry.entry_id) is None
 
 
 def test_the_redo_confirmation_enumerates_every_deletion_and_what_survives(machine):

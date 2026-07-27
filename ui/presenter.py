@@ -183,18 +183,23 @@ def redo_lines(plan: redo.Plan) -> list[str]:
     return found
 
 
-def bind_target_is_file(paths: Paths, entry_id: str) -> bool:
-    """Whether binding this Entry means pointing at a single file rather than a folder.
+def bind_file_name(paths: Paths, entry_id: str) -> str | None:
+    """The file name to bind under, when this Entry's save lives as a single file.
 
     Read from the Vault content it already holds, so a save that lives as one file (a lone
-    `.sav`, a `settings.ini`) lets the Bind dialog skip straight to a file picker instead of
-    first asking folder-or-file. An Entry with no content yet reads as False - either shape is
-    still possible, so the choice stays open.
+    `.sav`, a `settings.ini`) lets the Bind dialog ask only for the containing folder and
+    append this name itself. That is the name every other Machine's copy uses, so deriving it
+    rules out binding to a path the game will not read.
+
+    None means the shape is not known to be a single file - an Entry never Synced anywhere, or
+    one whose content is a folder - and the dialog keeps asking folder-or-file.
     """
     entry = entries.read(paths, entry_id)
     if entry is None or entry.content_name is None:
-        return False
-    return vault.content_is_file(paths, entry_id, entry.content_name)
+        return None
+    if not vault.content_is_file(paths, entry_id, entry.content_name):
+        return None
+    return entry.content_name
 
 
 def bind_hints(paths: Paths, config: Config, entry_id: str) -> list[str]:
