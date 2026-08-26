@@ -164,15 +164,21 @@ def test_ensure_clean_never_deletes_ignored_files(cloned):
 def test_ensure_clean_discards_debris_whose_path_exceeds_windows_max_path(cloned):
     """Entries are named after the user's save files, so Vault paths routinely run past the
     260-character Windows MAX_PATH. Without `core.longpaths`, `git clean` exits non-zero on
-    "Filename too long", the Vault can never be returned to HEAD, and the app cannot start."""
-    extended = chr(92) * 2 + "?" + chr(92)  # the Win32 prefix: needed to *create* the debris
+    "Filename too long", the Vault can never be returned to HEAD, and the app cannot start.
+
+    The regression this guards is Windows-only, but the test is not skipped elsewhere: POSIX
+    runs it as an ordinary deep-path cleanup, which costs nothing and keeps the assertions
+    honest on the machine where the bug cannot happen."""
+    # Only Windows needs the \\?\ extended-length prefix to *create* debris this deep;
+    # on POSIX the same path is unremarkable and the prefix would be a literal directory name.
+    prefix = chr(92) * 2 + "?" + chr(92) if os.name == "nt" else ""
     directory = cloned.vault_dir
     for part in ("entries", "a" * 120, "b" * 120):
         directory = directory / part
         if not directory.exists():
-            os.mkdir(extended + str(directory))
+            os.mkdir(prefix + str(directory))
     assert len(str(directory)) > 260
-    debris = extended + str(directory / ("c" * 60 + ".sav"))
+    debris = prefix + str(directory / ("c" * 60 + ".sav"))
     with open(debris, "wb") as handle:
         handle.write(b"half-copied save file")
 
