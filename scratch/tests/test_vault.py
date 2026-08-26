@@ -4,6 +4,7 @@ Real Git, in temp directories. A second Machine is a second clone of the same or
 network and no GitHub: the Cloud Vault is a bare repository on disk, reached over `file://`.
 """
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -158,6 +159,28 @@ def test_ensure_clean_never_deletes_ignored_files(cloned):
     vault.ensure_clean(cloned)
 
     assert (precious / "irreplaceable.zip").exists()
+
+
+def test_ensure_clean_discards_debris_whose_path_exceeds_windows_max_path(cloned):
+    """Entries are named after the user's save files, so Vault paths routinely run past the
+    260-character Windows MAX_PATH. Without `core.longpaths`, `git clean` exits non-zero on
+    "Filename too long", the Vault can never be returned to HEAD, and the app cannot start."""
+    extended = chr(92) * 2 + "?" + chr(92)  # the Win32 prefix: needed to *create* the debris
+    directory = cloned.vault_dir
+    for part in ("entries", "a" * 120, "b" * 120):
+        directory = directory / part
+        if not directory.exists():
+            os.mkdir(extended + str(directory))
+    assert len(str(directory)) > 260
+    debris = extended + str(directory / ("c" * 60 + ".sav"))
+    with open(debris, "wb") as handle:
+        handle.write(b"half-copied save file")
+
+    vault.ensure_clean(cloned)
+
+    assert not os.path.exists(debris)
+    assert not (cloned.vault_dir / "entries" / ("a" * 120)).exists()
+    assert vault.is_clean(cloned)
 
 
 def test_a_dirty_tree_is_refused_rather_than_committed(cloned):

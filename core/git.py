@@ -62,6 +62,12 @@ SAFE_CONFIG = (
     # config have no business running against it - and a failing hook would block a Sync.
     "core.hooksPath=/dev/null",
     "commit.gpgsign=false",
+    # Entries carry the user's save files under their own names, so Vault paths routinely run
+    # past the 260-character Windows MAX_PATH. Without this, Git cannot read, check out or
+    # clean those files: `clean -fd` exits non-zero on "Filename too long" and the Vault can
+    # never be brought back to HEAD, which strands the app at startup. Windows-only in effect;
+    # elsewhere Git ignores it.
+    "core.longpaths=true",
 )
 
 
