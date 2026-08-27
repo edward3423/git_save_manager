@@ -23,12 +23,14 @@ import threading
 from datetime import UTC, datetime
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
@@ -104,6 +106,54 @@ class MainWindow(QMainWindow):
         self.log_button = button("Git Log", self.show_git_log)
         self.redo_button = button("Redo Initialization...", self.redo_initialization)
 
+    def _build_filter_row(self) -> QVBoxLayout:
+        """The state filter and the sweep each checked state unlocks, above the sidebar.
+
+        These sit over the list rather than in the toolbar because that is what they are
+        scoped to: the toolbar holds actions for the whole application, while the filter
+        narrows this list and each sweep acts on exactly what the narrowing left in it.
+
+        A bulk button is *only* reachable through its own filter. That is not decoration - the
+        sidebar is then showing precisely the Entries the button will act on, so "all" is never
+        a set the user has to take on trust. Uncheck the filter and the button goes with it.
+        """
+        self.filter_states: set[EntryState] = set()
+        self.filter_actions: dict[EntryState, QAction] = {}
+        self.bulk_buttons: dict[EntryState, QPushButton] = {}
+
+        self.filter_button = QPushButton("Filter")
+        menu = QMenu(self.filter_button)
+        for state in presenter.BULK_ACTIONS:
+            action = QAction(presenter.STATE_CAPTIONS[state], menu)
+            action.setCheckable(True)
+            action.toggled.connect(lambda checked, s=state: self._set_filter(s, checked))
+            menu.addAction(action)
+            self.filter_actions[state] = action
+        self.filter_button.setMenu(menu)
+
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(self.filter_button)
+        filter_row.addStretch()
+
+        found = QVBoxLayout()
+        found.addLayout(filter_row)
+        # One row per sweep, each full width and each appearing only with its own filter. Two
+        # sweeps side by side would sit under a sidebar too narrow to read either label.
+        for state, (_, label) in presenter.BULK_ACTIONS.items():
+            widget = QPushButton(label)
+            widget.clicked.connect(lambda _=False, s=state: self.run_bulk(s))
+            widget.setVisible(False)
+            self.bulk_buttons[state] = widget
+            found.addWidget(widget)
+        return found
+
+    def _set_filter(self, state: EntryState, checked: bool) -> None:
+        if checked:
+            self.filter_states.add(state)
+        else:
+            self.filter_states.discard(state)
+        self.refresh()
+
     def _build_body(self) -> None:
         self.sidebar = QListWidget()
         self.sidebar.currentItemChanged.connect(lambda *_: self._show_selected())
@@ -159,8 +209,14 @@ class MainWindow(QMainWindow):
         self.console.setReadOnly(True)
         self.console.setObjectName("console")
 
+        sidebar_panel = QWidget()
+        sidebar_layout = QVBoxLayout(sidebar_panel)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.addLayout(self._build_filter_row())
+        sidebar_layout.addWidget(self.sidebar)
+
         top = QSplitter()
-        top.addWidget(self.sidebar)
+        top.addWidget(sidebar_panel)
         top.addWidget(details)
         top.setStretchFactor(0, 1)
         top.setStretchFactor(1, 2)
@@ -190,13 +246,19 @@ class MainWindow(QMainWindow):
         return super().event(event)
 
     def refresh(self) -> None:
-        """Recompute every row and caption from disk. The only writer of the sidebar."""
+        """Recompute every row and caption from disk. The only writer of the sidebar.
+
+        `self.rows` stays the *whole* truth; the filter narrows only what is drawn. Every
+        action still revalidates against the full set, so a filter can hide an Entry but never
+        change what the state machine says about it.
+        """
         selected = self.selected_entry_id()
         self.rows = presenter.rows(self.app.paths, self.app.the_ledger)
+        self.shown = presenter.visible_rows(self.rows, self.filter_states)
 
         self.sidebar.blockSignals(True)
         self.sidebar.clear()
-        for row in self.rows:
+        for row in self.shown:
             item = QListWidgetItem(f"{row.name}    -    {row.caption}")
             item.setData(Qt.ItemDataRole.UserRole, row.entry_id)
             self.sidebar.addItem(item)
@@ -206,6 +268,26 @@ class MainWindow(QMainWindow):
 
         self._show_selected()
         self._show_cloud()
+        self._show_bulk()
+
+    def _bulk_targets(self, state: EntryState) -> list[presenter.Row]:
+        """The Entries a sweep would act on: in that state, and still offering the action."""
+        action, _ = presenter.BULK_ACTIONS[state]
+        return presenter.bulk_targets(presenter.visible_rows(self.rows, {state}), action)
+
+    def _show_bulk(self) -> None:
+        """A sweep button appears with its filter, and carries the count it would act on.
+
+        The count is on the button rather than in a confirmation, so the number is visible
+        *before* the click - and it agrees with the sidebar, which is showing that same set.
+        """
+        for state, (_, label) in presenter.BULK_ACTIONS.items():
+            on = state in self.filter_states
+            targets = self._bulk_targets(state) if on else []
+            widget = self.bulk_buttons[state]
+            widget.setVisible(on)
+            widget.setText(f"{label} ({len(targets)})")
+            widget.setEnabled(bool(targets))
 
     def selected_entry_id(self) -> str | None:
         item = self.sidebar.currentItem()
@@ -373,6 +455,88 @@ class MainWindow(QMainWindow):
             )
         except (operations.SyncAborted, operations.NothingToSync) as error:
             log().warning("%s", error)
+        self._settled()
+
+    # --- the sweeps: many Entries, one approval, each still revalidated ---------------------
+
+    def run_bulk(self, state: EntryState) -> None:
+        """Push All / Pull All. Dispatched by state so the two share one entry point."""
+        if state is EntryState.LOCAL_AHEAD:
+            self.push_all_to_vault()
+        else:
+            self.pull_all_from_vault()
+
+    def push_all_to_vault(self) -> None:
+        """Sync every Local Ahead Entry, one commit each, sharing one summary.
+
+        Nothing is batched into a single commit: `sync_to_vault` stays the only writer of a
+        Baseline and still writes one per Entry, only once that Entry's commit has landed. A
+        sweep is therefore N ordinary Syncs, and a failure part-way through leaves the Entries
+        already done correctly Synced rather than half of a batch.
+        """
+        self.refresh()  # the staleness rule, once for the whole sweep
+        targets = self._bulk_targets(EntryState.LOCAL_AHEAD)
+        if not targets:
+            log().warning("No Entry is Local Ahead; nothing was done.")
+            return
+
+        note = dialogs.SyncDialog.ask_all(len(targets), self)
+        if note is None:  # cancelled
+            return
+
+        done = 0
+        for row in targets:
+            try:
+                operations.sync_to_vault(
+                    self.app.paths,
+                    self.app.config,
+                    self.app.description,
+                    self.app.the_ledger,
+                    row.entry_id,
+                    note=note or None,
+                )
+                done += 1
+            except (operations.SyncAborted, operations.NothingToSync) as error:
+                log().warning("%s was not Synced: %s", row.name, error)
+        log().info("Pushed %d of %d Entries to the Vault.", done, len(targets))
+        self._settled()
+
+    def pull_all_from_vault(self) -> None:
+        """Restore every Vault Ahead Entry, behind one preview that names all of them.
+
+        Invariant 7 is not weakened by doing several at once: the approval lists every path
+        every Entry will write, and each `restore_to_live` is handed the same `Preview` object
+        the user approved, so an Entry whose Live Save moved between the dialog and the write
+        is refused by the executor rather than silently overwritten.
+        """
+        self.refresh()
+        targets = self._bulk_targets(EntryState.VAULT_AHEAD)
+        if not targets:
+            log().warning("No Entry is Vault Ahead; nothing was done.")
+            return
+
+        previews = [
+            (row, operations.preview_restore(self.app.paths, self.app.the_ledger, row.entry_id))
+            for row in targets
+        ]
+        lines = presenter.bulk_preview_lines([(row.name, preview) for row, preview in previews])
+        if not dialogs.PreviewDialog.approve_lines("Pull All from Vault", lines, self):
+            return
+
+        done = 0
+        for row, preview in previews:
+            try:
+                operations.restore_to_live(
+                    self.app.paths,
+                    self.app.config,
+                    self.app.the_ledger,
+                    row.entry_id,
+                    approved=preview,
+                )
+                done += 1
+            except Exception as error:  # noqa: BLE001 - surfaced per Entry, never hidden
+                log().warning("%s was not Restored: %s", row.name, error)
+        log().info("Pulled %d of %d Entries from the Vault.", done, len(targets))
         self._settled()
 
     def restore_selected(self) -> None:

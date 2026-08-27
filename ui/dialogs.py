@@ -423,9 +423,9 @@ class SyncDialog(QDialog):
     the log surface it. The Sync itself is unchanged whether or not one is written.
     """
 
-    def __init__(self, name: str, parent: QWidget | None = None) -> None:
+    def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"Sync {name} to the Vault")
+        self.setWindowTitle(title)
         self.setMinimumWidth(460)
 
         self.note_edit = QLineEdit()
@@ -447,7 +447,21 @@ class SyncDialog(QDialog):
     @staticmethod
     def ask(name: str, parent: QWidget | None = None) -> str | None:
         """The user's summary (possibly empty) to Sync with, or None if they cancelled."""
-        dialog = SyncDialog(name, parent)
+        return SyncDialog._ask(f"Sync {name} to the Vault", parent)
+
+    @staticmethod
+    def ask_all(count: int, parent: QWidget | None = None) -> str | None:
+        """One summary for a whole sweep, asked once rather than once per Entry.
+
+        Each Entry still gets its own commit; they simply share a body. Asking per Entry would
+        make the note the slowest part of a bulk action and train the user to empty it.
+        """
+        plural = "Entry" if count == 1 else "Entries"
+        return SyncDialog._ask(f"Push {count} {plural} to the Vault", parent)
+
+    @staticmethod
+    def _ask(title: str, parent: QWidget | None = None) -> str | None:
+        dialog = SyncDialog(title, parent)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
         return dialog.note_edit.text().strip()

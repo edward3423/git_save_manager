@@ -13,7 +13,7 @@ from datetime import datetime
 from core import entries, ledger, operations, redo, vault
 from core.cloud import Cloud, CloudState
 from core.config import Config
-from core.entry_state import EntryState, EntryStatus
+from core.entry_state import Action, EntryState, EntryStatus
 from core.ledger import Ledger
 from core.paths import Paths
 from core.transaction import Change, Preview
@@ -55,6 +55,45 @@ def rows(paths: Paths, the_ledger: Ledger) -> list[Row]:
             caption = UNLINKED
         found.append(Row(entry_id=entry.entry_id, name=entry.name, caption=caption, status=status))
     return found
+
+
+# --- filtering the sidebar, and the bulk actions a filter unlocks -------------------------------
+
+
+BULK_ACTIONS = {
+    EntryState.LOCAL_AHEAD: (Action.SYNC_TO_VAULT, "Push All to Vault"),
+    EntryState.VAULT_AHEAD: (Action.RESTORE_TO_LIVE, "Pull All from Vault"),
+}
+"""The two states worth filtering to, and the one action each offers for every Entry at once.
+
+Only these two states qualify. A bulk action is safe exactly when the state names which side
+moved and every Entry in it wants the same thing done - which is true of Local Ahead and Vault
+Ahead and of nothing else. Conflict needs a human per Entry, In Sync has nothing to do, and the
+three absence states exist precisely to stop a sweep from propagating a deletion.
+"""
+
+
+def visible_rows(rows: list[Row], states: set[EntryState]) -> list[Row]:
+    """The rows a filter leaves on show. An empty filter means everything, unfiltered.
+
+    Unlinked Entries drop out of any filter: without a Binding there is no state to match on.
+    That does not contradict `UNLINKED` - an Unlinked Entry stays visible by default, and only
+    a filter the user switched on themselves can hide it.
+    """
+    if not states:
+        return list(rows)
+    return [row for row in rows if row.status is not None and row.status.state in states]
+
+
+def bulk_targets(rows: list[Row], action: Action) -> list[Row]:
+    """Of these rows, the ones whose own state still offers this action.
+
+    The state machine is asked per Entry rather than trusted per filter. A row can be Local
+    Ahead and still not offer Sync - `_guard` withdraws it the moment the Live Save has no
+    content - and a bulk action that assumed otherwise would be the one place in the app that
+    propagates an absence.
+    """
+    return [row for row in rows if row.status is not None and action in row.status.offered]
 
 
 def age(then: datetime, now: datetime) -> str:
@@ -152,6 +191,22 @@ def preview_lines(preview: Preview) -> list[str]:
         if preview.will_back_up
         else "No Backup is taken: the Live Save holds no content to archive."
     )
+    return found
+
+
+def bulk_preview_lines(previews: list[tuple[str, Preview]]) -> list[str]:
+    """Invariant 7 across a whole selection: every Entry a Pull All touches, named, with the
+    same per-Entry rendering the single-Entry dialog shows.
+
+    One approval covers the sweep, so the sweep has to show everything the sweep will do. The
+    per-Entry lines come from `preview_lines` rather than a second renderer, so a bulk approval
+    can never describe a write differently from the dialog that approves it one at a time.
+    """
+    found = [f"Pull {len(previews)} Entr{'y' if len(previews) == 1 else 'ies'} from the Vault."]
+    for name, preview in previews:
+        found.append("")
+        found.append(f"{name}:")
+        found += [f"  {line}" if line else "" for line in preview_lines(preview)]
     return found
 
 

@@ -12,7 +12,7 @@ import pytest
 from core import entries, operations, vault
 from core.cloud import Cloud, CloudState, CloudStatus, OfflineMode, OfflineReason
 from core.config import Config, MachineDescription
-from core.entry_state import EntryState
+from core.entry_state import Action, EntryState, EntryStatus
 from core.ledger import Ledger
 from core.paths import Paths
 from ui import presenter
@@ -54,6 +54,82 @@ def test_a_bound_entry_shows_its_state_and_an_unlinked_one_says_so(machine):
     assert rows[0].status is not None
     assert rows[0].status.state is EntryState.LOCAL_AHEAD
     assert rows[1].status is None  # nothing derivable without a Binding
+
+
+# --- filtering, and the bulk actions a filter unlocks --------------------------------------------
+
+
+def row(name: str, state: EntryState | None, offered: tuple[Action, ...] = ()) -> presenter.Row:
+    """A Row with just enough status to filter and sweep on. `state=None` is Unlinked."""
+    if state is None:
+        return presenter.Row(entry_id=name, name=name, caption=presenter.UNLINKED, status=None)
+    return presenter.Row(
+        entry_id=name,
+        name=name,
+        caption=presenter.STATE_CAPTIONS[state],
+        status=EntryStatus(
+            state=state, live=None, vault=None, baseline=None, offered=offered, recommended=None
+        ),
+    )
+
+
+def test_an_empty_filter_shows_everything_including_unlinked_entries():
+    """The default. `UNLINKED` says an Unlinked Entry stays visible, because hiding it would
+    conceal that Vault data exists - so no filter must mean no hiding."""
+    all_rows = [
+        row("Elden Ring", EntryState.LOCAL_AHEAD),
+        row("Hades", None),
+        row("Celeste", EntryState.IN_SYNC),
+    ]
+
+    assert presenter.visible_rows(all_rows, set()) == all_rows
+
+
+def test_a_filter_keeps_only_the_states_it_names():
+    all_rows = [
+        row("Elden Ring", EntryState.LOCAL_AHEAD),
+        row("Hades", EntryState.VAULT_AHEAD),
+        row("Celeste", EntryState.IN_SYNC),
+        row("Hollow Knight", EntryState.CONFLICT),
+    ]
+
+    local = presenter.visible_rows(all_rows, {EntryState.LOCAL_AHEAD})
+    vault_ahead = presenter.visible_rows(all_rows, {EntryState.VAULT_AHEAD})
+    both = presenter.visible_rows(all_rows, {EntryState.LOCAL_AHEAD, EntryState.VAULT_AHEAD})
+
+    assert [found.name for found in local] == ["Elden Ring"]
+    assert [found.name for found in vault_ahead] == ["Hades"]
+    assert [found.name for found in both] == ["Elden Ring", "Hades"]
+
+
+def test_a_filter_hides_unlinked_entries_because_they_have_no_state_to_match():
+    all_rows = [row("Elden Ring", EntryState.LOCAL_AHEAD), row("Hades", None)]
+
+    found = presenter.visible_rows(all_rows, {EntryState.LOCAL_AHEAD})
+
+    assert [entry.name for entry in found] == ["Elden Ring"]
+
+
+def test_a_bulk_sweep_skips_an_entry_whose_own_state_withdrew_the_action():
+    """The guard, not the filter, decides. An Entry can read Local Ahead while `_guard` has
+    withdrawn Sync - a Live Save with no content - and sweeping it anyway would commit the
+    absence into the Vault, which is the one thing every absence state exists to prevent."""
+    all_rows = [
+        row("Elden Ring", EntryState.LOCAL_AHEAD, offered=(Action.SYNC_TO_VAULT,)),
+        row("Hades", EntryState.LOCAL_AHEAD, offered=()),  # guarded: nothing to sync
+    ]
+
+    found = presenter.bulk_targets(all_rows, Action.SYNC_TO_VAULT)
+
+    assert [entry.name for entry in found] == ["Elden Ring"]
+
+
+def test_only_the_two_directional_states_offer_a_bulk_action():
+    """Conflict needs a human per Entry, In Sync has nothing to do, and the absence states
+    must never be swept. Only Local Ahead and Vault Ahead name which side moved."""
+    assert set(presenter.BULK_ACTIONS) == {EntryState.LOCAL_AHEAD, EntryState.VAULT_AHEAD}
+    assert presenter.BULK_ACTIONS[EntryState.LOCAL_AHEAD][0] is Action.SYNC_TO_VAULT
+    assert presenter.BULK_ACTIONS[EntryState.VAULT_AHEAD][0] is Action.RESTORE_TO_LIVE
 
 
 def status(state: CloudState, ahead: int = 0, behind: int = 0) -> CloudStatus:
@@ -139,6 +215,60 @@ def test_the_preview_names_every_file_operation_and_the_backup(machine):
         "",
         "The current Live Save is archived to a Backup first.",
     ]
+
+
+def test_a_bulk_preview_names_every_entry_and_reuses_the_single_entry_rendering(machine):
+    """One approval covers the whole sweep, so the sweep must show every write it will make.
+    The per-Entry lines come from `preview_lines` itself: a bulk approval can never describe a
+    write differently from the dialog that approves the same write one at a time."""
+    from pathlib import Path
+
+    from core.transaction import Change, FileChange, Preview
+
+    def preview(live: str, will_back_up: bool) -> Preview:
+        return Preview(
+            entry_id=live,
+            live_path=Path(live),
+            target_path=Path(live),
+            reason="restore",
+            changes=(FileChange("slot1.sav", Change.REPLACE, 2048),),
+            live_hash="aaa",
+            source_hash="bbb",
+            will_back_up=will_back_up,
+        )
+
+    elden = preview("C:/saves/Elden Ring", True)
+    hades = preview("C:/saves/Hades", False)
+
+    lines = presenter.bulk_preview_lines([("Elden Ring", elden), ("Hades", hades)])
+
+    assert lines[0] == "Pull 2 Entries from the Vault."
+    assert "Elden Ring:" in lines
+    assert "Hades:" in lines
+    # every line the single-Entry dialog would show, indented under its Entry
+    for name, one in (("Elden Ring", elden), ("Hades", hades)):
+        start = lines.index(f"{name}:")
+        indented = [f"  {line}" if line else "" for line in presenter.preview_lines(one)]
+        assert lines[start + 1 : start + 1 + len(indented)] == indented
+
+
+def test_a_bulk_preview_of_one_entry_says_entry_not_entries():
+    from pathlib import Path
+
+    from core.transaction import Change, FileChange, Preview
+
+    only = Preview(
+        entry_id="e",
+        live_path=Path("C:/saves/Hades"),
+        target_path=Path("C:/saves/Hades"),
+        reason="restore",
+        changes=(FileChange("slot1.sav", Change.ADD, 10),),
+        live_hash=None,
+        source_hash="bbb",
+        will_back_up=False,
+    )
+
+    assert presenter.bulk_preview_lines([("Hades", only)])[0] == "Pull 1 Entry from the Vault."
 
 
 def test_the_preview_says_when_there_is_nothing_to_back_up():
