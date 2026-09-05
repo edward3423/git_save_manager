@@ -122,13 +122,29 @@ def test_a_write_refuses_if_the_live_save_moved_since_the_preview(paths, config,
 
 
 def test_a_write_refuses_when_the_drive_is_not_mounted(paths, config, tmp_path):
-    """Creating the folder would write the save onto the boot disk underneath the mount point,
+    """Creating the folders would write the save onto the boot disk underneath the mount point,
     where the user will never find it and the real drive will shadow it on reconnection."""
     vault = tree(tmp_path / "vault", NEW)
     live = tmp_path / "not-mounted" / "Game" / "saves"
 
     with pytest.raises(LiveParentMissing):
         write_live(paths, config, ENTRY, live, TreeSource(vault), REASON)
+
+    assert not (tmp_path / "not-mounted").exists()
+
+
+def test_a_write_creates_one_missing_folder_level(paths, config, tmp_path):
+    """A game not yet installed here usually lacks only its own save folder; binding under an
+    existing folder is a plain intent to keep the save there."""
+    vault = tree(tmp_path / "vault", NEW)
+    (tmp_path / "Projects").mkdir()
+    live = tmp_path / "Projects" / "nut65_config" / "saves"
+
+    written = write_live(paths, config, ENTRY, live, TreeSource(vault), REASON)
+
+    assert not written.skipped
+    assert (tmp_path / "Projects" / "nut65_config").is_dir()
+    assert live.is_dir()
 
 
 def test_a_live_save_that_does_not_exist_yet_is_created_without_a_backup(paths, config, tmp_path):

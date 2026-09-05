@@ -13,7 +13,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QDialog,
@@ -29,6 +29,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QStyle,
     QStyledItemDelegate,
     QVBoxLayout,
@@ -296,6 +298,87 @@ class AddEntryDialog(QDialog):
         self.accept()
 
 
+class _StackScrollArea(QScrollArea):
+    """A scrolling area sized to its content up to a cap, scrolling either way as needed.
+
+    The height is a live size hint rather than a number captured at construction, so it is
+    right after the stylesheet has been applied and whenever the fonts change. Beyond
+    `max_height` the content scrolls vertically; wider than the viewport, it scrolls
+    horizontally - the inner labels never wrap or elide, so a long path is always readable.
+    """
+
+    def __init__(self, max_height: int) -> None:
+        super().__init__()
+        self.max_height = max_height
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self) -> QSize:
+        inner = self.widget().sizeHint() if self.widget() else QSize(0, 0)
+        bar = self.horizontalScrollBar().sizeHint().height()
+        return QSize(inner.width(), min(inner.height() + bar, self.max_height))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(0, self.sizeHint().height())
+
+
+class BindHintStrip(QWidget):
+    """The other Machines' Bindings for one Entry, as a vertical stack of cards.
+
+    Each card carries a "Use" button on its left: pressing it emits `use_requested` with
+    that Machine's hint so the caller can pre-fill a Bind here with the same folder. The
+    strip itself never binds anything - it only reports which hint was picked.
+    """
+
+    use_requested = pyqtSignal(object)  # presenter.BindHint
+    MAX_HEIGHT = 200  # about four cards; more than that scrolls
+
+    def __init__(self, hints: list[presenter.BindHint], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        stack = QWidget()
+        stack_layout = QVBoxLayout(stack)
+        stack_layout.setContentsMargins(0, 0, 0, 0)
+        stack_layout.setSpacing(6)
+        for hint in hints:
+            stack_layout.addWidget(self._card(hint))
+        stack_layout.addStretch()
+
+        scroll = _StackScrollArea(self.MAX_HEIGHT)
+        scroll.setObjectName("bindHints")
+        scroll.setWidget(stack)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll)
+
+    def _card(self, hint: presenter.BindHint) -> QWidget:
+        card = QWidget()
+        card.setObjectName("bindHintCard")
+        card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        use = QPushButton("Use")
+        use.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        use.setToolTip(f"Bind here using the folder {hint.machine} keeps this save in")
+        use.clicked.connect(lambda: self.use_requested.emit(hint))
+        machine = QLabel(hint.machine)
+        machine.setObjectName("bindHintMachine")
+        path = QLabel(hint.path)
+        path.setObjectName("bindHintPath")
+        path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        text = QVBoxLayout()
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(1)
+        text.addWidget(machine)
+        text.addWidget(path)
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(8, 6, 10, 6)
+        layout.addWidget(use, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(text, 1)
+        return card
+
+
 class BindDialog(QDialog):
     """Bind an Unlinked Entry here, with the other Machines' paths as read-only hints."""
 
@@ -306,6 +389,7 @@ class BindDialog(QDialog):
         name: str,
         parent: QWidget | None = None,
         pat: str | None = None,
+        prefill: presenter.BindHint | None = None,
     ) -> None:
         super().__init__(parent)
         self.app = app
@@ -316,7 +400,7 @@ class BindDialog(QDialog):
 
         hints = presenter.bind_hints(app.paths, app.config, entry_id)
         hint_label = QLabel(
-            "Other Machines keep this save at:\n" + "\n".join(f"  {h}" for h in hints)
+            "Other Machines keep this save at - press Use to bind here with the same folder:"
             if hints
             else "No other Machine has published a path for this Entry."
         )
@@ -352,6 +436,10 @@ class BindDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(hint_label)
+        if hints:
+            strip = BindHintStrip(hints)
+            strip.use_requested.connect(self.use_hint)
+            layout.addWidget(strip)
         if self.file_name:
             shape_label = QLabel(
                 f"This save is a single file named {self.file_name}. Choose the folder this "
@@ -365,10 +453,18 @@ class BindDialog(QDialog):
             self.preview_label = QLabel()
             self.preview_label.setObjectName("bindPreview")
             self.preview_label.setWordWrap(True)
+            self.preview_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.path_edit.textChanged.connect(self._refresh_preview)
             self._refresh_preview()
             layout.addWidget(self.preview_label)
         layout.addWidget(buttons)
+        if prefill is not None:
+            self.use_hint(prefill)
+
+    def use_hint(self, hint: presenter.BindHint) -> None:
+        """Pre-fill the folder box from another Machine's Binding. Still confirmed by OK."""
+        self.path_edit.setText(hint.suggested_folder(self.file_name))
+        self.path_edit.setFocus()
 
     def _refresh_preview(self) -> None:
         chosen = self.chosen_path()

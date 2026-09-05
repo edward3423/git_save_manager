@@ -310,7 +310,18 @@ def test_bind_hints_cite_other_machines_but_never_this_one(machine):
 
     hints = presenter.bind_hints(paths, config, entry.entry_id)
 
-    assert hints == ["desktop (Windows): D:/GameSaves/EldenRing"]  # never our own binding
+    assert [h.label for h in hints] == ["desktop (Windows): D:/GameSaves/EldenRing"]  # never ours
+    assert hints[0].suggested_folder(None) == "D:\\GameSaves\\EldenRing"
+
+
+def test_a_hint_for_a_single_file_suggests_the_containing_folder():
+    windows = presenter.BindHint("desktop", "Windows", "C:\\Saves\\game.sav")
+    posix = presenter.BindHint("laptop", "Darwin", "/Users/me/Saves/game.sav")
+
+    assert windows.suggested_folder("game.sav") == "C:\\Saves"
+    assert posix.suggested_folder("game.sav") == "/Users/me/Saves"
+    # A published path that does not end in the file name is taken as the folder itself.
+    assert posix.suggested_folder("other.sav") == "/Users/me/Saves/game.sav"
 
 
 def test_a_single_file_entry_is_bound_as_a_file(machine):

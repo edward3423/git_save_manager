@@ -84,6 +84,71 @@ QLineEdit:focus {
     border-color: #4f8cc9;
 }
 
+QScrollArea#bindHints {
+    background: transparent;
+}
+
+QScrollArea#bindHints > QWidget > QWidget {
+    background: transparent;
+}
+
+QScrollArea#bindHints QScrollBar:horizontal {
+    background: transparent;
+    height: 8px;
+    margin: 2px 0 0 0;
+}
+
+QScrollArea#bindHints QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 0 0 0 2px;
+}
+
+QScrollArea#bindHints QScrollBar::handle:horizontal,
+QScrollArea#bindHints QScrollBar::handle:vertical {
+    background: #3a3d42;
+    border-radius: 4px;
+}
+
+QScrollArea#bindHints QScrollBar::handle:horizontal {
+    min-width: 24px;
+}
+
+QScrollArea#bindHints QScrollBar::handle:vertical {
+    min-height: 24px;
+}
+
+QScrollArea#bindHints QScrollBar::handle:hover {
+    background: #4a4e55;
+}
+
+QScrollArea#bindHints QScrollBar::add-line,
+QScrollArea#bindHints QScrollBar::sub-line {
+    width: 0;
+    height: 0;
+}
+
+QScrollArea#bindHints QScrollBar::add-page,
+QScrollArea#bindHints QScrollBar::sub-page {
+    background: transparent;
+}
+
+QWidget#bindHintCard {
+    background: #26282c;
+    border: 1px solid #3a3d42;
+    border-radius: 4px;
+}
+
+QLabel#bindHintMachine {
+    color: #8b8f98;
+    font-size: 12px;
+}
+
+QLabel#bindHintPath {
+    color: #d6d8dc;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+}
+
 QLabel#bindPreview {
     color: #a8adb7;
     font-family: "Cascadia Mono", "Consolas", monospace;

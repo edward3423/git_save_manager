@@ -7,8 +7,10 @@ machine about what an Entry is.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 
 from core import entries, ledger, operations, redo, vault
 from core.cloud import Cloud, CloudState
@@ -257,7 +259,47 @@ def bind_file_name(paths: Paths, entry_id: str) -> str | None:
     return entry.content_name
 
 
-def bind_hints(paths: Paths, config: Config, entry_id: str) -> list[str]:
+@dataclass(frozen=True)
+class BindHint:
+    """Where one *other* Machine keeps a save - read-only, never acted on by itself.
+
+    The path is the string that Machine published, on its own disk and in its own OS's
+    spelling. The only thing derived from it is a *suggestion* for this Machine's Bind
+    dialog, which the user still confirms.
+    """
+
+    hostname: str
+    os_name: str
+    path: str
+
+    @property
+    def machine(self) -> str:
+        return f"{self.hostname} ({self.os_name})"
+
+    @property
+    def label(self) -> str:
+        return f"{self.machine}: {self.path}"
+
+    def suggested_folder(self, file_name: str | None) -> str:
+        """The text to pre-fill in the Bind dialog's folder box when reusing this Binding.
+
+        A single-file Entry publishes the file's full path, but the dialog asks for the
+        containing folder, so the last component is dropped. The published spelling is
+        kept: a Windows path is parsed as one even when read on a POSIX Machine, since the
+        common case for reuse is a second Machine of the same OS.
+        """
+        pure = _pure_path(self.path)
+        if file_name and pure.name == file_name:
+            return str(pure.parent)
+        return str(pure)
+
+
+def _pure_path(text: str) -> PurePath:
+    looks_windows = "\\" in text or re.match(r"^[A-Za-z]:", text) is not None
+    return PureWindowsPath(text) if looks_windows else PurePosixPath(text)
+
+
+def bind_hints(paths: Paths, config: Config, entry_id: str) -> list[BindHint]:
     """Where the *other* Machines keep this save - read-only, never acted on.
 
     Shown in the Bind dialog so the user on a second Machine can see 'the laptop keeps this
@@ -270,6 +312,10 @@ def bind_hints(paths: Paths, config: Config, entry_id: str) -> list[str]:
         published = machine.get("bindings", {})
         if entry_id in published:
             found.append(
-                f"{machine.get('hostname', '?')} ({machine.get('os', '?')}): {published[entry_id]}"
+                BindHint(
+                    hostname=machine.get("hostname", "?"),
+                    os_name=machine.get("os", "?"),
+                    path=str(published[entry_id]),
+                )
             )
     return found

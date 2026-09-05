@@ -66,12 +66,14 @@ class StalePreview(Exception):
 
 
 class LiveParentMissing(Exception):
-    """The folder that should contain the Live Save does not exist, so we refuse to write.
+    """The folder that should contain the Live Save is missing, along with its own parent.
 
-    Deliberately *not* solved by creating it. The usual cause is an unmounted drive, and
-    happily creating `/Volumes/Games/...` would write the save onto the boot disk, hidden
-    under the mount point, where the user will never find it and the real drive will shadow
-    it the moment it comes back.
+    One missing level is created: a game not yet installed here often lacks just its own
+    save folder, and binding to `.../Projects/nut65_config` when `Projects` exists is a
+    plain intent to keep the save there. Two or more missing levels are *not* created. The
+    usual cause is an unmounted drive, and happily creating `/Volumes/Games/...` would
+    write the save onto the boot disk, hidden under the mount point, where the user will
+    never find it and the real drive will shadow it the moment it comes back.
     """
 
 
@@ -266,6 +268,23 @@ class Journal:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
+def _ensure_parent(target: Path) -> None:
+    """Create the folder that will hold the Live Save, but only its last level.
+
+    See `LiveParentMissing` for why a deeper gap is a refusal rather than a `mkdir -p`.
+    """
+    parent = target.parent
+    if parent.is_dir():
+        return
+    if not parent.parent.is_dir():
+        raise LiveParentMissing(
+            f"{parent.parent} does not exist, so {target} cannot be written. "
+            "If the save lives on another drive, connect it and try again."
+        )
+    parent.mkdir()
+    log().info("Created %s", parent)
+
+
 def _staging_paths(target: Path) -> tuple[Path, Path]:
     """Siblings of the target, so both renames stay within one filesystem."""
     return (
@@ -340,11 +359,7 @@ def write_live(
         return Written(preview=current, backup=None, skipped=True)
 
     target = current.target_path
-    if not target.parent.is_dir():
-        raise LiveParentMissing(
-            f"{target.parent} does not exist, so {target} cannot be written. "
-            "If the save lives on another drive, connect it and try again."
-        )
+    _ensure_parent(target)
 
     staged, old = _staging_paths(target)
     _remove(staged)

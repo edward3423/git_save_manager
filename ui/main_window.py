@@ -164,8 +164,14 @@ class MainWindow(QMainWindow):
         self.detail_state.setObjectName("detailState")
         self.detail_path = QLabel()
         self.detail_path.setWordWrap(True)
+        # A path is something the user copies into Finder or a terminal.
+        self.detail_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.detail_hint = QLabel()
         self.detail_hint.setWordWrap(True)
+        # Other Machines' Bindings for an unbound Entry; rebuilt per selection, hidden otherwise.
+        self.detail_hints_slot = QVBoxLayout()
+        self.detail_hints_slot.setContentsMargins(0, 0, 0, 0)
+        self.detail_hints: dialogs.BindHintStrip | None = None
 
         def action_button(label: str, slot) -> QPushButton:
             found = QPushButton(label)
@@ -175,7 +181,8 @@ class MainWindow(QMainWindow):
         self.sync_button = action_button("Sync", self.sync_selected)
         self.restore_button = action_button("Restore", self.restore_selected)
         self.resolve_button = action_button("Resolve...", self.resolve_selected)
-        self.bind_button = action_button("Bind...", self.bind_selected)
+        # `clicked` carries a `checked` bool; the lambda keeps it out of `prefill`.
+        self.bind_button = action_button("Bind...", lambda: self.bind_selected())
         self.unbind_button = action_button("Unbind", self.unbind_selected)
         self.history_button = action_button("History...", self.show_history)
         self.backups_button = action_button("Backups...", self.show_backups)
@@ -201,6 +208,7 @@ class MainWindow(QMainWindow):
         details_layout = QVBoxLayout(details)
         for widget in (self.detail_name, self.detail_state, self.detail_path, self.detail_hint):
             details_layout.addWidget(widget)
+        details_layout.addLayout(self.detail_hints_slot)
         details_layout.addLayout(actions_row)
         details_layout.addLayout(views_row)
         details_layout.addStretch()
@@ -298,6 +306,7 @@ class MainWindow(QMainWindow):
         return next((row for row in self.rows if row.entry_id == wanted), None)
 
     def _show_selected(self) -> None:
+        self._show_hints([])
         row = self._selected_row()
         entry_buttons = (
             self.sync_button,
@@ -333,10 +342,11 @@ class MainWindow(QMainWindow):
             self.detail_path.setText("Not bound on this Machine.")
             hints = presenter.bind_hints(self.app.paths, self.app.config, row.entry_id)
             self.detail_hint.setText(
-                "Other Machines keep it at: " + "; ".join(hints)
+                "Other Machines keep it at - press Use to bind here with the same folder:"
                 if hints
                 else "Bind it to a folder here to sync it."
             )
+            self._show_hints(hints)
             self.sync_button.setEnabled(False)
             self.restore_button.setEnabled(False)
             self.resolve_button.setEnabled(False)
@@ -564,14 +574,25 @@ class MainWindow(QMainWindow):
         dialogs.resolve_sync_conflict(self.app, row.entry_id, row.name, self)
         self._settled()
 
-    def bind_selected(self) -> None:
+    def _show_hints(self, hints: list[presenter.BindHint]) -> None:
+        if self.detail_hints is not None:
+            self.detail_hints_slot.removeWidget(self.detail_hints)
+            self.detail_hints.deleteLater()
+            self.detail_hints = None
+        if hints:
+            self.detail_hints = dialogs.BindHintStrip(hints)
+            self.detail_hints.use_requested.connect(self.bind_selected)
+            self.detail_hints_slot.addWidget(self.detail_hints)
+
+    def bind_selected(self, prefill: presenter.BindHint | None = None) -> None:
+        """Bind the selected Entry here; `prefill` is another Machine's Binding to start from."""
         self.refresh()
         row = self._selected_row()
         if row is None or row.status is not None:
             return
         # Widening the sparse cone may lazily fetch this Entry's blobs from the Cloud.
         dialog = dialogs.BindDialog(
-            self.app, row.entry_id, row.name, self, pat=self.store.get_pat()
+            self.app, row.entry_id, row.name, self, pat=self.store.get_pat(), prefill=prefill
         )
         if dialog.exec():
             self._settled()
