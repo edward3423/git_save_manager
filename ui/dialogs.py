@@ -8,13 +8,15 @@ object is handed back to the executor, which refuses if the world moved since.
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import QSize, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -24,6 +26,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -40,7 +43,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core import backups, cloud, github, ledger, operations, redo, vault
+from core import backups, cloud, device_flow, github, ledger, operations, redo, vault
 from core.backups import Backup
 from core.cloud import Side
 from core.credentials import CredentialStore
@@ -94,17 +97,224 @@ class PreviewDialog(QDialog):
         return PreviewDialog(title, lines, parent).exec() == QDialog.DialogCode.Accepted
 
 
-# --- first-run setup ----------------------------------------------------------------------------
+# --- signing in, and first-run setup ------------------------------------------------------------
+
+
+SIGN_IN_FIELD_WIDTH = 400  # the sign-in dialogs size to content; this sets their width
+
+
+class GitHubSignIn(QWidget):
+    """ "Sign in with GitHub" through the device flow, or a pasted token as the fallback.
+
+    Signing in shows a short code, copies it to the clipboard, and opens github.com/login/device;
+    the user approves there, and the token arrives by itself. The network work runs on a worker
+    thread that touches no widget: each result crosses back through a signal tagged with the
+    run it belongs to, so an answer from a cancelled or superseded run is simply dropped.
+
+    The widget only *obtains* a token. Storing it is the caller's decision, after the caller
+    has checked the token can do what it is for (`core.credentials` stores only good tokens).
+    """
+
+    PAT_OFF = "Use a personal access token instead"
+    PAT_ON = "Sign in with GitHub instead"
+
+    changed = pyqtSignal()
+    """`token()` may have changed: signed in, signed out, or switched to the pasted token."""
+
+    _code_ready = pyqtSignal(object, object)  # run, device_flow.DeviceCode
+    _signed_in = pyqtSignal(object, str, str)  # run, token, login
+    _failed = pyqtSignal(object, str)  # run, message
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        transport: device_flow.Transport | None = None,
+        api: github.Api | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.transport = transport or device_flow.FormTransport()
+        self.api = api or github.RestApi()
+        self._run: threading.Event | None = None
+        self._token: str | None = None
+        self._login: str | None = None
+
+        self.sign_in_button = QPushButton("Sign in with GitHub")
+        self.sign_in_button.clicked.connect(self.start)
+        self.status = QLabel()
+        self.status.setObjectName("signInStatus")
+        self.status.setWordWrap(True)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.addWidget(self.sign_in_button)
+        top.addWidget(self.status, 1)
+
+        # The code panel: shown only while waiting for the user to approve on GitHub.
+        self.code_panel = QFrame()
+        self.code_panel.setObjectName("signInCode")
+        self.code_label = QLabel()
+        self.code_label.setObjectName("signInCodeText")
+        self.code_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.code_help = QLabel()
+        self.code_help.setWordWrap(True)
+        self.code_help.setObjectName("signInHelp")
+        copy = QPushButton("Copy code")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(self.code_label.text()))
+        self.open_button = QPushButton("Open GitHub")
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.cancel)
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.addWidget(copy)
+        actions.addWidget(self.open_button)
+        actions.addStretch()
+        actions.addWidget(cancel)
+        panel = QVBoxLayout(self.code_panel)
+        panel.setContentsMargins(12, 10, 12, 10)
+        panel.addWidget(self.code_help)
+        panel.addWidget(self.code_label)
+        panel.addLayout(actions)
+        self.code_panel.hide()
+
+        # A link-style toggle, not a checkbox: it names the other way, whichever is showing.
+        self.use_pat = QPushButton(self.PAT_OFF)
+        self.use_pat.setObjectName("linkButton")
+        self.use_pat.setCheckable(True)
+        self.use_pat.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.use_pat.toggled.connect(self._toggle_pat)
+        self.pat_edit = QLineEdit()
+        self.pat_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pat_edit.setPlaceholderText("classic PAT with the repo scope")
+        self.pat_edit.textChanged.connect(self.changed)
+        self.pat_edit.hide()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(top)
+        layout.addWidget(self.code_panel)
+        layout.addWidget(self.use_pat, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.pat_edit)
+
+        self._code_ready.connect(self._show_code)
+        self._signed_in.connect(self._done)
+        self._failed.connect(self._fail)
+        self._show_idle()
+
+    # --- what the caller reads -------------------------------------------------------------
+
+    def token(self) -> str | None:
+        if self.use_pat.isChecked():
+            return self.pat_edit.text().strip() or None
+        return self._token
+
+    def login(self) -> str | None:
+        """Who the signed-in token belongs to; None for a pasted token (validated later)."""
+        return None if self.use_pat.isChecked() else self._login
+
+    # --- the flow --------------------------------------------------------------------------
+
+    def start(self) -> None:
+        self.cancel()
+        self._token = self._login = None
+        run = threading.Event()
+        self._run = run
+        self.sign_in_button.setEnabled(False)
+        self.status.setText("Asking GitHub for a code...")
+        self.changed.emit()
+        threading.Thread(target=self._work, args=(run,), name="github-sign-in", daemon=True).start()
+
+    def cancel(self) -> None:
+        """Stop waiting. Safe at any time, including after the dialog has closed."""
+        if self._run is not None:
+            self._run.set()
+            self._run = None
+            self._show_idle()
+
+    def _work(self, run: threading.Event) -> None:
+        try:
+            code = device_flow.start(self.transport)
+            self._emit(run, self._code_ready, code)
+            token = device_flow.wait_for_token(self.transport, code, run.wait)
+            if token is None:
+                return  # cancelled
+            self._emit(run, self._signed_in, token, github.viewer(self.api, token))
+        except (device_flow.SignInFailed, github.GitHubUnreachable, github.BadToken) as error:
+            self._emit(run, self._failed, str(error))
+
+    @staticmethod
+    def _emit(run: threading.Event, signal, *args) -> None:  # noqa: ANN001 - a bound signal
+        if run.is_set():
+            return
+        # The dialog may close between the check and the emit; its signals go with it.
+        with contextlib.suppress(RuntimeError):
+            signal.emit(run, *args)
+
+    def _show_code(self, run: threading.Event, code: device_flow.DeviceCode) -> None:
+        if run is not self._run:
+            return
+        self.code_label.setText(code.user_code)
+        QApplication.clipboard().setText(code.user_code)
+        self.code_help.setText(
+            f"Enter this code at {code.verification_uri} (it is already on your clipboard), "
+            "then approve the request. This window carries on by itself."
+        )
+        with contextlib.suppress(TypeError):
+            self.open_button.clicked.disconnect()
+        url = QUrl(code.verification_uri)
+        self.open_button.clicked.connect(lambda: QDesktopServices.openUrl(url))
+        QDesktopServices.openUrl(url)
+        self.status.setText("Waiting for you to approve on GitHub...")
+        self.code_panel.show()
+
+    def _done(self, run: threading.Event, token: str, login: str) -> None:
+        if run is not self._run:
+            return
+        self._run = None
+        self._token, self._login = token, login
+        self.code_panel.hide()
+        self.sign_in_button.setText("Sign in again")
+        self.sign_in_button.setEnabled(True)
+        self.status.setText(f"Signed in as {login}.")
+        self.changed.emit()
+
+    def _fail(self, run: threading.Event, message: str) -> None:
+        if run is not self._run:
+            return
+        self._run = None
+        self._show_idle()
+        log().warning("%s", message)
+        self.status.setText(message)
+
+    def _show_idle(self) -> None:
+        self.code_panel.hide()
+        self.sign_in_button.setText("Sign in with GitHub")
+        self.sign_in_button.setEnabled(not self.use_pat.isChecked())
+        self.status.setText("Not signed in.")
+
+    def _toggle_pat(self, on: bool) -> None:
+        self.cancel()
+        self.use_pat.setText(self.PAT_ON if on else self.PAT_OFF)
+        self.pat_edit.setVisible(on)
+        self.sign_in_button.setEnabled(not on)
+        self.status.setEnabled(not on)
+        if on:
+            self.pat_edit.setFocus()
+        self.changed.emit()
 
 
 class SetupDialog(QDialog):
-    """Repo and PAT in, one of the four bootstrap paths out.
+    """Repo and a GitHub sign-in in, one of the four bootstrap paths out.
 
-    The PAT reaches the keyring only after GitHub has accepted it and the bootstrap has
+    The token reaches the keyring only after GitHub has accepted it and the bootstrap has
     completed - a token that failed validation is not worth storing.
     """
 
-    def __init__(self, app: App, store: CredentialStore, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        app: App,
+        store: CredentialStore,
+        parent: QWidget | None = None,
+        sign_in: GitHubSignIn | None = None,
+    ) -> None:
         super().__init__(parent)
         self.app = app
         self.store = store
@@ -112,36 +322,51 @@ class SetupDialog(QDialog):
 
         self.repo_edit = QLineEdit()
         self.repo_edit.setPlaceholderText("owner/repository")
-        self.pat_edit = QLineEdit()
-        self.pat_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.pat_edit.setPlaceholderText("classic PAT with the repo scope")
+        self.repo_edit.setMinimumWidth(SIGN_IN_FIELD_WIDTH)
+        self.sign_in = sign_in or GitHubSignIn()
 
         form = QFormLayout()
         form.addRow("GitHub repository", self.repo_edit)
-        form.addRow("Personal access token", self.pat_edit)
+        form.addRow("GitHub account", self.sign_in)
 
         note = QLabel(
             "A private repository is created if it does not exist. An existing repository "
             "is joined only if it is a Vault; anything else is refused untouched."
         )
         note.setWordWrap(True)
+        note.setObjectName("dimNote")
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
+        self.ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(self.run_bootstrap)
         buttons.rejected.connect(self.reject)
+        self.repo_edit.textChanged.connect(self._refresh_ok)
+        self.sign_in.changed.connect(self._refresh_ok)
+        self._refresh_ok()
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addSpacing(4)
         layout.addWidget(note)
         layout.addWidget(buttons)
+        # The code panel appears and disappears; the dialog follows it instead of keeping
+        # the waiting state's height as an empty gap once signed in.
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+
+    def _refresh_ok(self) -> None:
+        self.ok_button.setEnabled("/" in self.repo_edit.text() and self.sign_in.token() is not None)
+
+    def done(self, result: int) -> None:
+        self.sign_in.cancel()  # never leave a poll running behind a closed dialog
+        super().done(result)
 
     def run_bootstrap(self) -> None:
         repo = self.repo_edit.text().strip()
-        token = self.pat_edit.text().strip()
+        token = self.sign_in.token()
         if "/" not in repo or not token:
-            QMessageBox.warning(self, "Set up", "Both owner/repository and a token are needed.")
+            QMessageBox.warning(self, "Set up", "Both owner/repository and a sign-in are needed.")
             return
 
         try:
@@ -195,6 +420,75 @@ class SetupDialog(QDialog):
             "registering a new Machine beside it?",
         )
         return answer is QMessageBox.StandardButton.Yes
+
+
+class SignInDialog(QDialog):
+    """Sign this already set-up Machine in to GitHub again: a revoked or expired token, or a
+    different account. The new token is stored only once it has reached the Cloud Vault, so a
+    sign-in to the wrong account cannot replace a token that still works."""
+
+    def __init__(
+        self,
+        app: App,
+        store: CredentialStore,
+        parent: QWidget | None = None,
+        sign_in: GitHubSignIn | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.app = app
+        self.store = store
+        self.setWindowTitle("Sign in to GitHub")
+
+        intro = QLabel(
+            f"Sign this Machine in to the GitHub account that can reach {app.config.repo}. "
+            "Only the stored sign-in changes; the Vault and every save are untouched."
+        )
+        intro.setWordWrap(True)
+        self.sign_in = sign_in or GitHubSignIn()
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(self.run_save)
+        buttons.rejected.connect(self.reject)
+        self.sign_in.changed.connect(
+            lambda: self.ok_button.setEnabled(self.sign_in.token() is not None)
+        )
+        self.ok_button.setEnabled(False)
+
+        intro.setMinimumWidth(SIGN_IN_FIELD_WIDTH + 120)
+        layout = QVBoxLayout(self)
+        layout.addWidget(intro)
+        layout.addWidget(self.sign_in)
+        layout.addWidget(buttons)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+
+    def done(self, result: int) -> None:
+        self.sign_in.cancel()
+        super().done(result)
+
+    def run_save(self) -> None:
+        token = self.sign_in.token()
+        if token is None:
+            return
+        # The one probe that proves this token can reach this repository - and, succeeding,
+        # it is also the explicit Check Connection that leaves Offline Mode.
+        if not self.app.cloud.check_connection(token):
+            who = self.sign_in.login()
+            QMessageBox.warning(
+                self,
+                "Sign in",
+                (f"Signed in as {who}, but" if who else "This token")
+                + f" could not reach {self.app.config.repo}. The previous sign-in was kept."
+                "\n\nSign in with the account that owns the repository (or has access to it).",
+            )
+            return
+        self.store.set_pat(token)
+        log().info(
+            "Signed in to GitHub%s.", f" as {self.sign_in.login()}" if self.sign_in.login() else ""
+        )
+        self.accept()
 
 
 # --- adding and binding -------------------------------------------------------------------------

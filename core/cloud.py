@@ -43,7 +43,7 @@ class CloudStatus:
 
 
 class OfflineReason(StrEnum):
-    """What the user can do about it: check their connection, or re-enter their PAT."""
+    """What the user can do about it: check their connection, or sign in to GitHub again."""
 
     NO_NETWORK = "no_network"
     AUTH_FAILED = "auth_failed"
@@ -74,7 +74,7 @@ class CloudOffline(Exception):
     def __init__(self, mode: OfflineMode) -> None:
         self.mode = mode
         hint = (
-            "Re-enter your GitHub token, then use Check Connection."
+            "Use Sign In to sign in to GitHub again."
             if mode.reason is OfflineReason.AUTH_FAILED
             else "Use Check Connection when the network is back."
         )

@@ -101,7 +101,8 @@ class MainWindow(QMainWindow):
         self.push_button = button("Push", self.push)
         self.fetch_button = button("Fetch Status", self.fetch_status)
         self.check_button = button("Check Connection", self.check_connection)
-        self.setup_button = button("Set Up...", self.set_up)
+        # Set Up before this Machine is set up, Sign In after: never both, so one button.
+        self.setup_button = button("Set Up...", self.set_up_or_sign_in)
         self.machines_button = button("Machines", self.show_machines)
         self.log_button = button("Git Log", self.show_git_log)
         self.redo_button = button("Redo Initialization...", self.redo_initialization)
@@ -379,7 +380,8 @@ class MainWindow(QMainWindow):
         self.push_button.setEnabled(online and ready)
         self.fetch_button.setEnabled(online and ready)
         self.check_button.setEnabled(ready)  # explicitly allowed while offline: the way back
-        self.setup_button.setEnabled(not ready)
+        # Signing in again is also the way back from "authentication failed".
+        self.setup_button.setText("Sign In..." if ready else "Set Up...")
         self.machines_button.setEnabled(ready)
         self.log_button.setEnabled(ready)
 
@@ -420,7 +422,7 @@ class MainWindow(QMainWindow):
     def _pat(self) -> str | None:
         found = self.store.get_pat()
         if found is None:
-            log().warning("No GitHub token is stored. Run Set Up first.")
+            log().warning("This Machine is not signed in to GitHub. Use Sign In first.")
         return found
 
     def _revalidated(self, action: Action) -> presenter.Row | None:
@@ -440,6 +442,17 @@ class MainWindow(QMainWindow):
 
     def set_up(self) -> None:
         if dialogs.SetupDialog(self.app, self.store, self).exec():
+            self.refresh()
+            self._fetch_soon()
+
+    def set_up_or_sign_in(self) -> None:
+        if self.app.config.is_set_up:
+            self.sign_in()
+        else:
+            self.set_up()
+
+    def sign_in(self) -> None:
+        if dialogs.SignInDialog(self.app, self.store, self).exec():
             self.refresh()
             self._fetch_soon()
 

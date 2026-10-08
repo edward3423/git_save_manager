@@ -141,13 +141,14 @@ class Bootstrapped:
     with everything it had published."""
 
 
-def _viewer(api: Api, token: str) -> str:
-    """Validate the PAT against `/user` and name its owner. The first call, always."""
+def viewer(api: Api, token: str) -> str:
+    """Validate the token against `/user` and name its owner. Bootstrap's first call, always,
+    and how the sign-in screen says who it signed in as."""
     answer = api.request("GET", "/user", token)
     if answer.status != 200:
         raise BadToken(
-            "GitHub did not accept this token. Issue a classic PAT with the `repo` scope "
-            "and try again."
+            "GitHub did not accept this token. Sign in with GitHub again, or issue a classic "
+            "PAT with the `repo` scope."
         )
     return answer.data["login"]
 
@@ -228,7 +229,7 @@ def bootstrap(
     under a different identity: answering True reclaims that identity - its UUID and its
     published Bindings - instead of registering a fresh Machine beside the ghost.
     """
-    login = _viewer(api, token)
+    login = viewer(api, token)
 
     found = api.request("GET", f"/repos/{repo}", token)
     if found.status == 404:

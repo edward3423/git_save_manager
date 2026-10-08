@@ -170,6 +170,45 @@ QLabel#bindHintPath {
     font-family: "Cascadia Mono", "Consolas", monospace;
 }
 
+QFrame#signInCode {
+    background: #26282c;
+    border: 1px solid #4f8cc9;
+    border-radius: 4px;
+}
+
+QFrame#signInCode QLabel {
+    background: transparent;
+}
+
+QLabel#signInCodeText {
+    font-family: "Cascadia Mono", "Consolas", "Menlo", monospace;
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    padding: 4px 0 6px 0;
+}
+
+QLabel#signInHelp, QLabel#dimNote {
+    color: #a8adb7;
+}
+
+QLabel#signInStatus:disabled {
+    color: #5d6169;
+}
+
+QPushButton#linkButton {
+    background: transparent;
+    border: none;
+    padding: 2px 0;
+    color: #6fa3d8;
+    text-align: left;
+}
+
+QPushButton#linkButton:hover {
+    color: #8fbbe6;
+    text-decoration: underline;
+}
+
 QLabel#bindPreview {
     color: #a8adb7;
     font-family: "Cascadia Mono", "Consolas", monospace;
