@@ -342,7 +342,7 @@ class MainWindow(QMainWindow):
             self.detail_path.setText("Not bound on this Machine.")
             hints = presenter.bind_hints(self.app.paths, self.app.config, row.entry_id)
             self.detail_hint.setText(
-                "Other Machines keep it at - press Use to bind here with the same folder:"
+                "Other Machines keep it at - click one to bind here with the same folder:"
                 if hints
                 else "Bind it to a folder here to sync it."
             )

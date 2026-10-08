@@ -133,10 +133,31 @@ QScrollArea#bindHints QScrollBar::sub-page {
     background: transparent;
 }
 
-QWidget#bindHintCard {
+QFrame#bindHintCard {
     background: #26282c;
     border: 1px solid #3a3d42;
     border-radius: 4px;
+}
+
+QFrame#bindHintCard:hover {
+    background: #2e3136;
+    border-color: #4a4e55;
+}
+
+QFrame#bindHintCard:focus {
+    border-color: #4f8cc9;
+}
+
+QFrame#bindHintCard[chosen="true"] {
+    border-color: #4f8cc9;
+    background: #273241;
+}
+
+/* The labels sit on the card: without this, the global QWidget rule paints each one its own
+   window-coloured strip inside the card. */
+QFrame#bindHintCard QLabel {
+    background: transparent;
+    border: none;
 }
 
 QLabel#bindHintMachine {
@@ -171,8 +192,17 @@ QStatusBar {
 }
 
 QStatusBar QLabel {
+    background: transparent;
     color: #8b8f98;
     padding: 2px 10px;
+}
+
+QStatusBar::item {
+    border: none;
+}
+
+QSizeGrip {
+    background: transparent;
 }
 
 QSplitter::handle {

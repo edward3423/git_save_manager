@@ -16,10 +16,12 @@ from pathlib import Path
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -33,6 +35,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QStyle,
     QStyledItemDelegate,
+    QStyleOptionFrame,
     QVBoxLayout,
     QWidget,
 )
@@ -321,25 +324,92 @@ class _StackScrollArea(QScrollArea):
         return QSize(0, self.sizeHint().height())
 
 
-class BindHintStrip(QWidget):
-    """The other Machines' Bindings for one Entry, as a vertical stack of cards.
+class _HintCard(QFrame):
+    """One other Machine's Binding, clickable as a whole: machine name over its path.
 
-    Each card carries a "Use" button on its left: pressing it emits `use_requested` with
-    that Machine's hint so the caller can pre-fill a Bind here with the same folder. The
-    strip itself never binds anything - it only reports which hint was picked.
+    The card is the button - mouse, Enter, and Space all emit `clicked` - so the path a user
+    reads is the thing they press. The labels inside stay non-interactive on purpose: a
+    selectable label would swallow the click. Copying the path moves to the context menu.
+    """
+
+    clicked = pyqtSignal()
+
+    def __init__(self, hint: presenter.BindHint, tooltip: str) -> None:
+        super().__init__()
+        self.hint = hint
+        self.setObjectName("bindHintCard")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setToolTip(tooltip)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._menu)
+        self.set_chosen(False)
+
+        machine = QLabel(hint.machine)
+        machine.setObjectName("bindHintMachine")
+        path = QLabel(hint.path)
+        path.setObjectName("bindHintPath")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(1)
+        layout.addWidget(machine)
+        layout.addWidget(path)
+
+    def set_chosen(self, chosen: bool) -> None:
+        """Mark the card whose path is the one now filled in. Styled by `[chosen="true"]`."""
+        self.setProperty("chosen", chosen)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001 - Qt override
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+            event.position().toPoint()
+        ):
+            self.clicked.emit()
+            return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: ANN001 - Qt override
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit()
+            return
+        super().keyPressEvent(event)
+
+    def _menu(self, at) -> None:  # noqa: ANN001 - QPoint
+        menu = QMenu(self)
+        menu.addAction("Copy path", lambda: QApplication.clipboard().setText(self.hint.path))
+        menu.exec(self.mapToGlobal(at))
+
+
+class BindHintStrip(QWidget):
+    """The other Machines' Bindings for one Entry, as a vertical stack of clickable cards.
+
+    Clicking a card emits `use_requested` with that Machine's hint so the caller can pre-fill
+    a Bind here with the same folder. The strip itself never binds anything - it only reports
+    which hint was picked, and shows which one is currently in use (`mark_chosen`).
     """
 
     use_requested = pyqtSignal(object)  # presenter.BindHint
     MAX_HEIGHT = 200  # about four cards; more than that scrolls
 
-    def __init__(self, hints: list[presenter.BindHint], parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        hints: list[presenter.BindHint],
+        tooltip: str = "Click to bind here using this folder",
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         stack = QWidget()
         stack_layout = QVBoxLayout(stack)
         stack_layout.setContentsMargins(0, 0, 0, 0)
         stack_layout.setSpacing(6)
+        self.cards: list[_HintCard] = []
         for hint in hints:
-            stack_layout.addWidget(self._card(hint))
+            card = _HintCard(hint, tooltip)
+            card.clicked.connect(lambda h=hint: self.use_requested.emit(h))
+            stack_layout.addWidget(card)
+            self.cards.append(card)
         stack_layout.addStretch()
 
         scroll = _StackScrollArea(self.MAX_HEIGHT)
@@ -354,33 +424,34 @@ class BindHintStrip(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(scroll)
 
-    def _card(self, hint: presenter.BindHint) -> QWidget:
-        card = QWidget()
-        card.setObjectName("bindHintCard")
-        card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        use = QPushButton("Use")
-        use.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        use.setToolTip(f"Bind here using the folder {hint.machine} keeps this save in")
-        use.clicked.connect(lambda: self.use_requested.emit(hint))
-        machine = QLabel(hint.machine)
-        machine.setObjectName("bindHintMachine")
-        path = QLabel(hint.path)
-        path.setObjectName("bindHintPath")
-        path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        text = QVBoxLayout()
-        text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(1)
-        text.addWidget(machine)
-        text.addWidget(path)
-        layout = QHBoxLayout(card)
-        layout.setContentsMargins(8, 6, 10, 6)
-        layout.addWidget(use, 0, Qt.AlignmentFlag.AlignVCenter)
-        layout.addLayout(text, 1)
-        return card
+    def mark_chosen(self, is_chosen: Callable[[presenter.BindHint], bool]) -> None:
+        """Highlight every card `is_chosen` accepts - typed text can match a hint too."""
+        for card in self.cards:
+            card.set_chosen(is_chosen(card.hint))
+
+
+def _line_edit_width_for(edit: QLineEdit, text: str) -> int:
+    """The width `edit` needs to show `text` whole: Qt's own arithmetic for a line edit's size
+    hint (text, its 2px side margins, the cursor), with the frame and stylesheet padding added
+    by the style. Measured after polishing, so in the stylesheet's font, not the default."""
+    edit.ensurePolished()
+    metrics = edit.fontMetrics()
+    margins = edit.textMargins()
+    inner = QSize(
+        metrics.horizontalAdvance(text) + 2 * 2 + 1 + margins.left() + margins.right(),
+        metrics.height(),
+    )
+    option = QStyleOptionFrame()
+    edit.initStyleOption(option)
+    return (
+        edit.style().sizeFromContents(QStyle.ContentsType.CT_LineEdit, option, inner, edit).width()
+    )
 
 
 class BindDialog(QDialog):
-    """Bind an Unlinked Entry here, with the other Machines' paths as read-only hints."""
+    """Bind an Unlinked Entry here; clicking another Machine's path fills it in."""
+
+    MAX_PATH_WIDTH = 760  # beyond this the dialog would outgrow a laptop screen; the box scrolls
 
     def __init__(
         self,
@@ -396,11 +467,10 @@ class BindDialog(QDialog):
         self.entry_id = entry_id
         self.pat = pat
         self.setWindowTitle(f"Bind {name}")
-        self.setMinimumWidth(520)
 
         hints = presenter.bind_hints(app.paths, app.config, entry_id)
         hint_label = QLabel(
-            "Other Machines keep this save at - press Use to bind here with the same folder:"
+            "Other Machines keep this save at - click one to use the same folder here:"
             if hints
             else "No other Machine has published a path for this Entry."
         )
@@ -436,10 +506,18 @@ class BindDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(hint_label)
+        self.strip: BindHintStrip | None = None
         if hints:
-            strip = BindHintStrip(hints)
-            strip.use_requested.connect(self.use_hint)
-            layout.addWidget(strip)
+            self.strip = BindHintStrip(hints, tooltip="Click to fill in this folder")
+            self.strip.use_requested.connect(self.use_hint)
+            self.path_edit.textChanged.connect(self._mark_chosen_hint)
+            layout.addWidget(self.strip)
+            # Wide enough that a clicked hint reads whole in the box, not scrolled to its tail.
+            longest = max(
+                _line_edit_width_for(self.path_edit, h.suggested_folder(self.file_name))
+                for h in hints
+            )
+            self.path_edit.setMinimumWidth(min(longest, self.MAX_PATH_WIDTH))
         if self.file_name:
             shape_label = QLabel(
                 f"This save is a single file named {self.file_name}. Choose the folder this "
@@ -458,6 +536,9 @@ class BindDialog(QDialog):
             self._refresh_preview()
             layout.addWidget(self.preview_label)
         layout.addWidget(buttons)
+        # An explicit minimum on a window overrides the one its layout would impose, so take
+        # the larger: a floor for short paths, and never narrower than the contents need.
+        self.setMinimumWidth(max(520, layout.totalMinimumSize().width()))
         if prefill is not None:
             self.use_hint(prefill)
 
@@ -465,6 +546,10 @@ class BindDialog(QDialog):
         """Pre-fill the folder box from another Machine's Binding. Still confirmed by OK."""
         self.path_edit.setText(hint.suggested_folder(self.file_name))
         self.path_edit.setFocus()
+
+    def _mark_chosen_hint(self, text: str) -> None:
+        typed = text.strip()
+        self.strip.mark_chosen(lambda hint: hint.suggested_folder(self.file_name) == typed)
 
     def _refresh_preview(self) -> None:
         chosen = self.chosen_path()
