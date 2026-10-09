@@ -1063,6 +1063,50 @@ def run_redo(app: App, store: CredentialStore, parent: QWidget) -> bool:
     return True
 
 
+# --- showing a file in the platform's file manager -----------------------------------------------
+
+
+REVEAL_LABEL = {"darwin": "Show in Finder", "win32": "Show in Explorer"}.get(
+    sys.platform, "Open Folder"
+)
+
+
+def reveal(path: Path) -> None:
+    """Select `path` in Finder or Explorer; elsewhere there is no portable "select", so the
+    folder holding it is opened instead (hence the label)."""
+    if sys.platform == "win32":
+        subprocess.Popen(["explorer", "/select,", str(path)])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path.parent)])
+
+
+def _home_relative(path: Path) -> str:
+    """`~/Downloads/Hades` rather than the full path: short enough to read in a message box."""
+    try:
+        return str(Path("~") / path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
+
+
+def show_downloaded(parent: QWidget, name: str, landed: Path) -> None:
+    """Say where a Download landed, and that it is now just a copy the app will not touch."""
+    box = QMessageBox(parent)
+    box.setWindowTitle("Downloaded")
+    box.setText(f"{name} was downloaded.")
+    box.setInformativeText(
+        f"Saved as {_home_relative(landed)}\n\nThis is a plain copy of the Vault's version. It "
+        "is not bound, and Sync and Restore will never touch it."
+    )
+    box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    show = box.addButton(REVEAL_LABEL, QMessageBox.ButtonRole.ActionRole)
+    box.addButton(QMessageBox.StandardButton.Ok)
+    box.exec()
+    if box.clickedButton() is show:
+        reveal(landed)
+
+
 # --- history, backups, machines, the log --------------------------------------------------------
 
 
@@ -1234,7 +1278,7 @@ class BackupsDialog(QDialog):
 
         restore = QPushButton("Restore...")
         restore.clicked.connect(self.run_restore)
-        reveal = QPushButton("Reveal in Explorer")
+        reveal = QPushButton(REVEAL_LABEL)
         reveal.clicked.connect(self.run_reveal)
         close = QPushButton("Close")
         close.clicked.connect(self.reject)
@@ -1276,14 +1320,8 @@ class BackupsDialog(QDialog):
 
     def run_reveal(self) -> None:
         backup = self._selected()
-        if backup is None:
-            return
-        if sys.platform == "win32":
-            subprocess.Popen(["explorer", "/select,", str(backup.path)])
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", "-R", str(backup.path)])
-        else:
-            subprocess.Popen(["xdg-open", str(backup.path.parent)])
+        if backup is not None:
+            reveal(backup.path)
 
 
 class MachinesDialog(QDialog):

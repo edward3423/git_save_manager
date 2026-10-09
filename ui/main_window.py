@@ -19,18 +19,22 @@ Rules from the plan enforced structurally in this file:
 from __future__ import annotations
 
 import contextlib
+import tarfile
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QStandardPaths, Qt, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
@@ -40,7 +44,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core import operations
+from core import download, operations
 from core.cloud import CloudOffline, ForeignConflict, PushRejected
 from core.credentials import CredentialStore, KeyringCredentialStore
 from core.entry_state import Action, EntryState
@@ -188,6 +192,10 @@ class MainWindow(QMainWindow):
         self.history_button = action_button("History...", self.show_history)
         self.backups_button = action_button("Backups...", self.show_backups)
         self.remove_button = action_button("Remove from Vault", self.remove_selected)
+        self.download_button = action_button("Download", self.download_selected)
+        self.download_button.setToolTip(
+            "Save a copy of the Vault's version to your Downloads folder. Binds nothing."
+        )
 
         actions_row = QHBoxLayout()
         for widget in (
@@ -201,7 +209,12 @@ class MainWindow(QMainWindow):
         actions_row.addStretch()
 
         views_row = QHBoxLayout()
-        for widget in (self.history_button, self.backups_button, self.remove_button):
+        for widget in (
+            self.history_button,
+            self.backups_button,
+            self.download_button,
+            self.remove_button,
+        ):
             views_row.addWidget(widget)
         views_row.addStretch()
 
@@ -317,6 +330,7 @@ class MainWindow(QMainWindow):
             self.unbind_button,
             self.history_button,
             self.backups_button,
+            self.download_button,
             self.remove_button,
         )
 
@@ -337,6 +351,7 @@ class MainWindow(QMainWindow):
         self.detail_state.setText(row.caption)
         self.history_button.setEnabled(True)
         self.backups_button.setEnabled(True)
+        self.download_button.setEnabled(presenter.downloadable(self.app.paths, row.entry_id))
         self.remove_button.setEnabled(True)
 
         if row.status is None:
@@ -629,8 +644,6 @@ class MainWindow(QMainWindow):
         row = self._selected_row()
         if row is None:
             return
-        from PyQt6.QtWidgets import QMessageBox
-
         answer = QMessageBox.question(
             self,
             "Remove from Vault",
@@ -647,6 +660,35 @@ class MainWindow(QMainWindow):
                 row.entry_id,
             )
         self._settled()
+
+    def download_selected(self) -> None:
+        """Copy the Vault's version to Downloads. Binds nothing, so no state is re-validated:
+        the copy is whatever HEAD holds at the moment it runs."""
+        row = self._selected_row()
+        if row is None:
+            return
+        folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+        destination = Path(folder) if folder else Path.home() / "Downloads"
+        # An Entry never fetched here comes from GitHub, which can take a moment.
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            landed = download.download(
+                self.app.paths, row.entry_id, destination, pat=self.store.get_pat()
+            )
+        except (
+            download.NothingToDownload,
+            download.NeedsSignIn,
+            download.FetchFailed,
+            OSError,
+            tarfile.TarError,
+        ) as error:
+            QApplication.restoreOverrideCursor()
+            log().warning("%s", error)
+            QMessageBox.warning(self, "Download", str(error))
+            return
+        QApplication.restoreOverrideCursor()
+        log().info("Downloaded %s to %s.", row.name, landed)
+        dialogs.show_downloaded(self, row.name, landed)
 
     def show_history(self) -> None:
         row = self._selected_row()

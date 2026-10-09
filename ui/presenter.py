@@ -319,3 +319,17 @@ def bind_hints(paths: Paths, config: Config, entry_id: str) -> list[BindHint]:
                 )
             )
     return found
+
+
+def downloadable(paths: Paths, entry_id: str) -> bool:
+    """Whether the Vault holds content for this Entry at HEAD - what Download would copy.
+
+    Reads the tree, never a blob, so it is free even for an Entry this Machine never fetched.
+    False for an Entry no Machine has Synced yet, and for one removed from the Vault.
+    """
+    entry = entries.read(paths, entry_id)
+    if entry is None or entry.content_name is None:
+        return False
+    return bool(
+        vault.git(paths).run("ls-tree", "HEAD", "--", f"entries/{entry_id}/{entry.content_name}")
+    )
