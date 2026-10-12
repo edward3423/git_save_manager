@@ -15,7 +15,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from PyQt6.QtCore import QSize, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
@@ -554,6 +554,14 @@ def _typed_path(text: str) -> Path:
     return Path(text.strip()).expanduser()
 
 
+def _growing_form() -> QFormLayout:
+    """A form whose fields take the dialog's whole width. On macOS a QFormLayout otherwise
+    keeps every field at its natural width, leaving boxes too narrow to read a path in."""
+    form = QFormLayout()
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+    return form
+
+
 class _PathRow(QWidget):
     """One path in the Add Entry dialog: a box, a Browse menu, and a way to take it out again."""
 
@@ -575,6 +583,9 @@ class _PathRow(QWidget):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        # One gap throughout. The macOS style otherwise puts more space between two buttons
+        # than between the box and a button, so Remove stood apart from Browse....
+        layout.setSpacing(8)
         layout.addWidget(self.edit)
         layout.addWidget(self.browse)
         layout.addWidget(self.remove)
@@ -609,7 +620,11 @@ class AddEntryDialog(QDialog):
         self.name_edit.setPlaceholderText("Elden Ring")
 
         self.rows: list[_PathRow] = []
-        self.rows_layout = QVBoxLayout()
+        # The rows live in a widget of their own, not a nested layout: a QFormLayout sizes a
+        # widget field properly, but under-reports the height of a layout nested in it, and
+        # the rows were squashed flat on macOS when a second one was added.
+        rows_box = QWidget()
+        self.rows_layout = QVBoxLayout(rows_box)
         self.rows_layout.setContentsMargins(0, 0, 0, 0)
         self.rows_layout.setSpacing(6)
 
@@ -618,9 +633,6 @@ class AddEntryDialog(QDialog):
             "Keep several files - in any folders - together as this one Entry"
         )
         self.add_row_button.clicked.connect(lambda: self.add_row().edit.setFocus())
-        add_row = QHBoxLayout()
-        add_row.addWidget(self.add_row_button)
-        add_row.addStretch()
 
         self.set_note = QLabel(
             "These files become one Entry: synced, restored and backed up together. Each must "
@@ -631,17 +643,16 @@ class AddEntryDialog(QDialog):
         tip = QLabel(HIDDEN_FILES_TIP)
         tip.setObjectName("dimNote")
         tip.setWordWrap(True)
+        self.notes = (self.set_note, tip)
 
-        paths_box = QVBoxLayout()
-        paths_box.setSpacing(6)
-        paths_box.addLayout(self.rows_layout)
-        paths_box.addLayout(add_row)
-        paths_box.addWidget(self.set_note)
-        paths_box.addWidget(tip)
-
-        form = QFormLayout()
+        self.form = form = _growing_form()
         form.addRow("Name", self.name_edit)
-        form.addRow("Live Save", paths_box)
+        form.addRow("Live Save", rows_box)
+        form.addRow("", self.add_row_button)
+        # Direct form fields, so each wrapped note is given the height its wrapped lines need.
+        form.addRow("", self.set_note)
+        form.addRow("", tip)
+        self.add_row_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -669,7 +680,6 @@ class AddEntryDialog(QDialog):
         self.rows_layout.removeWidget(row)
         row.deleteLater()
         self.refresh()
-        self.adjustSize()
 
     def refresh(self) -> None:
         """One row reads as a file or folder; more than one, as files only."""
@@ -681,7 +691,38 @@ class AddEntryDialog(QDialog):
             row.edit.setPlaceholderText(
                 "a file to keep in this Entry" if several else "the folder or file the game writes"
             )
-        self.set_note.setVisible(several)
+        # The whole row, not just the label: a hidden field alone leaves its row's spacing.
+        self.form.setRowVisible(self.set_note, several)
+        if self.isVisible():
+            # Once Qt has finished laying out the rows that just came or went.
+            QTimer.singleShot(0, self._fit_height)
+
+    def _fit_height(self) -> None:
+        """Size every wrapped note to the lines it wraps to at its actual width, then the
+        window to its contents, keeping the width the user chose.
+
+        Done by hand because Qt does neither here: a form estimates a wrapped label's height at
+        a guessed width, so on macOS notes were clipped mid-line, and a window does not resize
+        itself when rows come and go after it is shown.
+        """
+        layout = self.layout()
+        if layout is None:
+            return
+        layout.activate()
+        for note in self.notes:
+            if note.width() > 0:
+                note.setFixedHeight(note.heightForWidth(note.width()))
+        layout.activate()
+        self.resize(self.width(), layout.totalMinimumSize().height())
+
+    def showEvent(self, event) -> None:  # noqa: ANN001 - Qt override
+        super().showEvent(event)
+        self._fit_height()
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001 - Qt override
+        super().resizeEvent(event)
+        if event.oldSize().width() != event.size().width():
+            self._fit_height()  # a new width wraps the notes differently
 
     def chosen(self) -> list[Path]:
         return [_typed_path(row.edit.text()) for row in self.rows if row.edit.text().strip()]
@@ -1114,7 +1155,7 @@ class BindFilesDialog(QDialog):
             self.strip.use_requested.connect(self.use_hint)
             layout.addWidget(self.strip)
 
-        form = QFormLayout()
+        form = _growing_form()
         for member, path in bound.items():
             # Already bound and kept as is: shown, cut in the middle when long, never edited.
             kept = QLabel()
@@ -1351,7 +1392,7 @@ class SyncDialog(QDialog):
         self.note_edit = QLineEdit()
         self.note_edit.setPlaceholderText("boss slain, graphics tweaked, ... (optional)")
 
-        form = QFormLayout()
+        form = _growing_form()
         form.addRow("Summary", self.note_edit)
 
         buttons = QDialogButtonBox(

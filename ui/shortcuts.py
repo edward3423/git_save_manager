@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import QEvent, QObject
 from PyQt6.QtGui import QKeyEvent, QKeySequence
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 
 
 class WindowShortcuts(QObject):
@@ -21,7 +21,7 @@ class WindowShortcuts(QObject):
         if event.type() != QEvent.Type.KeyPress or not isinstance(event, QKeyEvent):
             return False
         if event.matches(QKeySequence.StandardKey.Close):
-            close_active_window()
+            close_window(watched.window() if isinstance(watched, QWidget) else None)
             return True
         if event.matches(QKeySequence.StandardKey.Quit):
             quit_application()
@@ -29,12 +29,13 @@ class WindowShortcuts(QObject):
         return False
 
 
-def close_active_window() -> None:
-    """Close the window in front: a dialog closes as if cancelled, and the main window closes
-    the application, as it would from its title bar."""
-    active = QApplication.activeWindow()
-    if active is not None:
-        active.close()
+def close_window(window: QWidget | None) -> None:
+    """Close the window the keys were pressed in: a dialog closes as if cancelled, and the main
+    window closes the application, as it would from its title bar. With no window to hand,
+    the active one."""
+    target = window or QApplication.activeWindow()
+    if target is not None:
+        target.close()
 
 
 def quit_application() -> None:
