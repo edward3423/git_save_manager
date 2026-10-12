@@ -29,6 +29,15 @@ must have its staging sit on that drive, next to the real directory - otherwise 
 crosses a filesystem, and swapping the link itself would replace the user's symlink with a
 real folder and strand every other program that follows it.
 
+## A File Set is written as one
+
+A File Set is several files in unrelated folders (`~/.skhdrc`, `~/.yabairc`) that are one
+Entry. Each file is swapped exactly as above, beside itself, and they are swapped *together*:
+one Backup holds every member about to be overwritten, every member is staged and fsynced
+before any is swapped, and the journal records all of them under one stage. A crash part-way
+through the swaps is therefore rolled forward for every member - each staged copy is complete
+- so the files are never left half from one version and half from another.
+
 ## The journal remembers only what we did
 
 Git protects the Vault (ADR-0005), so the journal covers Live Save writes and nothing else.
@@ -43,7 +52,7 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -53,12 +62,16 @@ from typing import Any, Protocol
 from core import backups
 from core.backups import Backup
 from core.config import Config
-from core.hashing import content_hash
+from core.hashing import content_hash, file_set_hash
 from core.jsonstore import fsync_dir, read_json, write_json
 from core.logger import log
 from core.paths import Paths
 
-SCHEMA = 1
+SCHEMA = 2
+
+Layout = Path | Mapping[str, Path]
+"""Where an Entry's Live Save is on this Machine: one path for a file or folder Entry, or
+member name -> path for a File Set."""
 
 
 class StalePreview(Exception):
@@ -75,6 +88,11 @@ class LiveParentMissing(Exception):
     write the save onto the boot disk, hidden under the mount point, where the user will
     never find it and the real drive will shadow it the moment it comes back.
     """
+
+
+class NotAFile(Exception):
+    """A File Set member's Live Save path is a folder. Swapping a file over it would replace a
+    whole folder that no Backup holds, so nothing is written."""
 
 
 class Stage(StrEnum):
@@ -99,34 +117,49 @@ class Outcome(StrEnum):
 
 
 class Source(Protocol):
-    """Content bound for a Live Save. A Vault Entry, or a Backup archive."""
+    """Content bound for a Live Save. A Vault Entry, or a Backup archive.
+
+    `member` names one file of a File Set; `None` means the whole of a file or folder Entry.
+    """
 
     def digest(self) -> str | None: ...
 
-    def files(self) -> dict[str, int]:
-        """Relative posix path -> size in bytes. For the preview."""
+    def files(self, member: str | None) -> dict[str, int]:
+        """Relative posix path -> size in bytes, for the preview. Empty when the source holds
+        nothing for `member` - and that member is then left untouched."""
         ...
 
-    def materialize(self, destination: Path) -> None: ...
+    def materialize(self, member: str | None, destination: Path) -> None: ...
 
 
 @dataclass(frozen=True)
 class TreeSource:
-    """An Entry's content directory in the Vault, or any plain file or folder."""
+    """An Entry's content in the Vault, or any plain file or folder.
+
+    For a File Set, `path` is the folder holding the members and `members` names them, so
+    anything else lying in that folder is neither hashed nor written.
+    """
 
     path: Path
+    members: tuple[str, ...] | None = None
 
     def digest(self) -> str | None:
-        return content_hash(self.path)
+        if self.members is None:
+            return content_hash(self.path)
+        return file_set_hash({name: self.path / name for name in self.members})
 
-    def files(self) -> dict[str, int]:
-        return _measure(self.path)
+    def files(self, member: str | None) -> dict[str, int]:
+        if member is None:
+            return _measure(self.path)
+        item = self.path / member
+        return {member: item.lstat().st_size} if item.is_file() else {}
 
-    def materialize(self, destination: Path) -> None:
-        if self.path.is_dir() and not self.path.is_symlink():
-            shutil.copytree(self.path, destination, symlinks=True)
+    def materialize(self, member: str | None, destination: Path) -> None:
+        item = self.path if member is None else self.path / member
+        if item.is_dir() and not item.is_symlink():
+            shutil.copytree(item, destination, symlinks=True)
         else:
-            shutil.copy2(self.path, destination, follow_symlinks=False)
+            shutil.copy2(item, destination, follow_symlinks=False)
 
 
 @dataclass(frozen=True)
@@ -138,11 +171,14 @@ class BackupSource:
     def digest(self) -> str | None:
         return backups.archive_hash(self.backup.path)
 
-    def files(self) -> dict[str, int]:
-        return backups.contents(self.backup.path)
+    def files(self, member: str | None) -> dict[str, int]:
+        found = backups.contents(self.backup.path)
+        if member is None:
+            return found
+        return {member: found[member]} if member in found else {}
 
-    def materialize(self, destination: Path) -> None:
-        backups.extract(self.backup, destination)
+    def materialize(self, member: str | None, destination: Path) -> None:
+        backups.extract(self.backup, destination, member)
 
 
 def _measure(root: Path) -> dict[str, int]:
@@ -176,6 +212,17 @@ class FileChange:
 
 
 @dataclass(frozen=True)
+class PartPreview:
+    """What a write does to one path: the whole of a file or folder Entry, or one File Set
+    member."""
+
+    member: str | None
+    live_path: Path
+    target_path: Path
+    changes: tuple[FileChange, ...]
+
+
+@dataclass(frozen=True)
 class Preview:
     """Exactly what a write would do, computed before anyone is asked to approve it.
 
@@ -184,13 +231,19 @@ class Preview:
     """
 
     entry_id: str
-    live_path: Path
-    target_path: Path
     reason: str
-    changes: tuple[FileChange, ...]
+    parts: tuple[PartPreview, ...]
     live_hash: str | None
     source_hash: str | None
     will_back_up: bool
+
+    @property
+    def is_file_set(self) -> bool:
+        return any(part.member is not None for part in self.parts)
+
+    @property
+    def changes(self) -> tuple[FileChange, ...]:
+        return tuple(change for part in self.parts for change in part.changes)
 
     @property
     def is_noop(self) -> bool:
@@ -211,11 +264,21 @@ def resolve_target(live: Path) -> Path:
     return live.resolve() if live.is_symlink() else live
 
 
-def preview(paths: Paths, entry_id: str, live: Path, source: Source, reason: str) -> Preview:
+def _part(member: str | None, live: Path, source: Source) -> PartPreview | None:
     target = resolve_target(live)
+    after = source.files(member)
 
-    before = _measure(target)
-    after = source.files()
+    if member is None:
+        before = _measure(target)
+    else:
+        if not after:
+            return None  # the source holds nothing for this member: it is not touched
+        if target.is_dir():
+            raise NotAFile(
+                f"{live} is a folder, but it is bound as the file {member}. Nothing has been "
+                "written. Move the folder aside, or bind the file somewhere else."
+            )
+        before = {member: target.lstat().st_size} if target.exists() else {}
 
     changes = [
         FileChange(path, Change.REPLACE if path in before else Change.ADD, size)
@@ -226,14 +289,23 @@ def preview(paths: Paths, entry_id: str, live: Path, source: Source, reason: str
         for path in sorted(before)
         if path not in after
     ]
+    return PartPreview(member=member, live_path=live, target_path=target, changes=tuple(changes))
 
-    live_hash = content_hash(target)
+
+def preview(paths: Paths, entry_id: str, live: Layout, source: Source, reason: str) -> Preview:
+    if isinstance(live, Mapping):
+        found = [_part(member, path, source) for member, path in sorted(live.items())]
+        parts = tuple(part for part in found if part is not None)
+        # Only the members this write touches: they are what gets compared and backed up.
+        live_hash = file_set_hash({part.member: part.target_path for part in parts})
+    else:
+        parts = (_part(None, live, source),)
+        live_hash = content_hash(parts[0].target_path)
+
     return Preview(
         entry_id=entry_id,
-        live_path=live,
-        target_path=target,
         reason=reason,
-        changes=tuple(changes),
+        parts=parts,
         live_hash=live_hash,
         source_hash=source.digest(),
         will_back_up=live_hash is not None,
@@ -244,15 +316,23 @@ def preview(paths: Paths, entry_id: str, live: Path, source: Source, reason: str
 
 
 @dataclass
-class Journal:
-    """One in-flight Live Save write. At most one exists: `app.lock` makes the app single-instance
-    and the UI runs one operation at a time."""
+class Swap:
+    """One path being swapped: the bound path, the real path behind it, and its two siblings."""
 
-    entry_id: str
     live_path: str
     target_path: str
     staged_path: str
     old_path: str
+
+
+@dataclass
+class Journal:
+    """One in-flight Live Save write. At most one exists: `app.lock` makes the app single-instance
+    and the UI runs one operation at a time. A File Set's write is still one write, with one
+    swap per member."""
+
+    entry_id: str
+    swaps: list[Swap]
     reason: str
     stage: str
     started_at: str
@@ -264,8 +344,17 @@ class Journal:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Journal:
-        known = set(cls.__dataclass_fields__)
-        return cls(**{k: v for k, v in data.items() if k in known})
+        if "swaps" in data:
+            swaps = [Swap(**swap) for swap in data["swaps"]]
+        else:
+            # Schema 1, left by an older build: a single swap, flattened into the journal.
+            swaps = [Swap(**{key: data[key] for key in Swap.__dataclass_fields__})]
+        known = set(cls.__dataclass_fields__) - {"swaps"}
+        return cls(swaps=swaps, **{k: v for k, v in data.items() if k in known})
+
+    @property
+    def live_paths(self) -> str:
+        return ", ".join(swap.live_path for swap in self.swaps)
 
 
 def _ensure_parent(target: Path) -> None:
@@ -328,11 +417,19 @@ class Written:
     skipped: bool = False
 
 
+def _backup_subject(current: Preview) -> Path | dict[str, Path]:
+    """What the Backup must hold: the folder or file, or every File Set member about to be
+    overwritten - which is exactly the set `live_hash` was computed over."""
+    if not current.is_file_set:
+        return current.parts[0].target_path
+    return {part.member: part.target_path for part in current.parts if part.target_path.is_file()}
+
+
 def write_live(
     paths: Paths,
     config: Config,
     entry_id: str,
-    live: Path,
+    live: Layout,
     source: Source,
     reason: str,
     approved: Preview | None = None,
@@ -345,38 +442,40 @@ def write_live(
     swept away by a preview computed before it wrote.
     """
     current = preview(paths, entry_id, live, source, reason)
+    shown = live if not isinstance(live, Mapping) else ", ".join(map(str, live.values()))
 
     if approved is not None and (
         approved.live_hash != current.live_hash or approved.source_hash != current.source_hash
     ):
         raise StalePreview(
-            f"{live} changed since it was previewed. Nothing has been written. "
+            f"{shown} changed since it was previewed. Nothing has been written. "
             "Refresh and look again."
         )
 
     if current.is_noop:
-        log().info("%s already matches; nothing to write.", live)
+        log().info("%s already matches; nothing to write.", shown)
         return Written(preview=current, backup=None, skipped=True)
 
-    target = current.target_path
-    _ensure_parent(target)
-
-    staged, old = _staging_paths(target)
-    _remove(staged)
-    _remove(old)
+    swaps = []
+    for part in current.parts:
+        target = part.target_path
+        _ensure_parent(target)
+        staged, old = _staging_paths(target)
+        _remove(staged)
+        _remove(old)
+        swaps.append(Swap(str(part.live_path), str(target), str(staged), str(old)))
 
     # The backup comes first, and is verified against the very bytes we are about to destroy.
     backup = None
     if current.live_hash is not None:
-        backup = backups.create(paths, entry_id, target, reason, expected_hash=current.live_hash)
-        log().info("Backed up %s to %s", live, backup.path.name)
+        subject = _backup_subject(current)
+        backup = backups.create(paths, entry_id, subject, reason, expected_hash=current.live_hash)
+        archived = ", ".join(map(str, subject.values())) if isinstance(subject, dict) else subject
+        log().info("Backed up %s to %s", archived, backup.path.name)
 
     journal = Journal(
         entry_id=entry_id,
-        live_path=str(live),
-        target_path=str(target),
-        staged_path=str(staged),
-        old_path=str(old),
+        swaps=swaps,
         reason=reason,
         stage=Stage.BACKED_UP,
         started_at=datetime.now(UTC).isoformat(),
@@ -390,21 +489,29 @@ def write_live(
     # of the renames actually landed. A handler here would be guessing, and a crash (rather
     # than an exception) would not run it anyway, so it would be a second, less-tested
     # recovery path for exactly the same states.
-    source.materialize(staged)
-    _fsync_tree(staged)
+    #
+    # Every member is staged before any is swapped, so that once the first swap begins, every
+    # staged copy is complete and recovery can finish the lot.
+    for part, swap in zip(current.parts, swaps, strict=True):
+        staged = Path(swap.staged_path)
+        source.materialize(part.member, staged)
+        _fsync_tree(staged)
     _record(paths, journal, Stage.STAGED)
 
-    if target.exists() or target.is_symlink():
-        os.rename(target, old)  # the save is now absent: the only unsafe instant
-    os.rename(staged, target)  # and present again, whole
-    fsync_dir(target.parent)
+    for swap in swaps:
+        target, staged, old = Path(swap.target_path), Path(swap.staged_path), Path(swap.old_path)
+        if target.exists() or target.is_symlink():
+            os.rename(target, old)  # the save is now absent: the only unsafe instant
+        os.rename(staged, target)  # and present again, whole
+        fsync_dir(target.parent)
     _record(paths, journal, Stage.SWAPPED)
 
-    _remove(old)
+    for swap in swaps:
+        _remove(Path(swap.old_path))
     paths.journal_file.unlink(missing_ok=True)
 
     pruned = backups.prune(paths, entry_id, config.backup_retention)
-    log().info("Wrote %s (%s)", live, reason)
+    log().info("Wrote %s (%s)", shown, reason)
 
     return Written(preview=current, backup=backup, pruned=tuple(pruned))
 
@@ -424,63 +531,81 @@ class Recovered:
     outcome: Outcome
 
 
+def _present(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _swap_started(swap: Swap) -> bool:
+    """Whether this path's swap has begun: the first rename landed, or the second did too, or
+    there was never a Live Save to rename away and the staged copy is the only thing left to
+    install. Read from the disk, never from the journal."""
+    return (
+        _present(Path(swap.old_path))
+        or not _present(Path(swap.target_path))
+        or not _present(Path(swap.staged_path))
+    )
+
+
+def _finish(swap: Swap) -> bool:
+    """Roll one swap forward from wherever it stopped. False if it had to be put back instead."""
+    target, staged, old = Path(swap.target_path), Path(swap.staged_path), Path(swap.old_path)
+
+    if _present(staged):
+        # The staged copy is complete - the journal reached STAGED, which is only written after
+        # an fsync of every member - so install it, moving the old content aside if it is
+        # still in place.
+        if _present(target) and not _present(old):
+            os.rename(target, old)
+        os.rename(staged, target)
+        _remove(old)
+        return True
+
+    if _present(target):
+        # Both renames landed; only the old copy is left to clean up.
+        _remove(old)
+        return True
+
+    if _present(old):
+        # The first rename landed and the staged copy is gone. Put the original back.
+        os.rename(old, target)
+    return False
+
+
 def recover(paths: Paths) -> Recovered | None:
     """Finish or undo a Live Save write that a crash interrupted. Run once, at startup.
 
     The journal says how far we *got*; the disk says what actually landed, and the disk wins,
     because the crash may have fallen between a rename and the journal write that records it.
     So the decision is made from the evidence: which of `staged`, `target` and `target.old`
-    exist right now.
+    exist right now, for every path the write was swapping.
+
+    The answer is the same for all of them. Before STAGED, a staged copy may be half-written,
+    so it is debris and every path is left as it was. From STAGED on, every staged copy is
+    complete: if no swap has begun, the write is abandoned whole; if any has, it is finished
+    whole. A File Set is never left with some files from the new version and some from the old.
     """
     data = read_json(paths.journal_file)
     if data is None:
         return None
 
     journal = Journal.from_dict(data)
-    target = Path(journal.target_path)
-    staged = Path(journal.staged_path)
-    old = Path(journal.old_path)
 
-    exists = target.exists() or target.is_symlink()
-
-    if journal.stage == Stage.BACKED_UP:
-        # The staged copy may be half-written, so it is not content - it is debris. The Live
-        # Save has not been touched, and the swap cannot have started.
-        _remove(staged)
-        _remove(old)
+    if journal.stage == Stage.BACKED_UP or not any(_swap_started(s) for s in journal.swaps):
+        for swap in journal.swaps:
+            _remove(Path(swap.staged_path))
+            _remove(Path(swap.old_path))
         outcome = Outcome.ROLLED_BACK
-
-    elif exists:
-        # The Live Save is whole. Either the swap never started (and `staged` is still there,
-        # to be discarded) or it finished and we died before recording it (and `old` is there,
-        # to be cleaned up). Both are safe; neither can be torn.
-        outcome = Outcome.COMPLETED if old.exists() else Outcome.ROLLED_BACK
-        _remove(staged)
-        _remove(old)
-
-    elif staged.exists() or staged.is_symlink():
-        # Caught inside the swap window, between the two renames. `staged` is complete - the
-        # journal reached STAGED, which is only written after an fsync - so finish the job.
-        os.rename(staged, target)
-        _remove(old)
-        outcome = Outcome.COMPLETED
-
-    elif old.exists() or old.is_symlink():
-        # The first rename landed and the second did not, and the staged copy is gone. Put
-        # the original save back exactly where it was.
-        os.rename(old, target)
-        outcome = Outcome.ROLLED_BACK
-
     else:
-        # Nothing anywhere: the Live Save did not exist before this write, and never got one.
-        outcome = Outcome.ROLLED_BACK
+        finished = [_finish(swap) for swap in journal.swaps]
+        outcome = Outcome.COMPLETED if all(finished) else Outcome.ROLLED_BACK
 
-    fsync_dir(target.parent)
+    for swap in journal.swaps:
+        fsync_dir(Path(swap.target_path).parent)
     paths.journal_file.unlink(missing_ok=True)
 
     log().warning(
         "Recovered an interrupted write of %s: %s (backup: %s)",
-        journal.live_path,
+        journal.live_paths,
         outcome.value,
         journal.backup_path or "none taken",
     )

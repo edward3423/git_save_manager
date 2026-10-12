@@ -19,6 +19,7 @@ Rules from the plan enforced structurally in this file:
 from __future__ import annotations
 
 import contextlib
+import html
 import tarfile
 import threading
 from datetime import UTC, datetime
@@ -161,6 +162,10 @@ class MainWindow(QMainWindow):
 
     def _build_body(self) -> None:
         self.sidebar = QListWidget()
+        # A long name or caption is cut short with an ellipsis (the full text is the tooltip)
+        # rather than pushing the list into a horizontal scroll.
+        self.sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.sidebar.currentItemChanged.connect(lambda *_: self._show_selected())
 
         self.detail_name = QLabel()
@@ -196,6 +201,8 @@ class MainWindow(QMainWindow):
         self.download_button.setToolTip(
             "Save a copy of the Vault's version to your Downloads folder. Binds nothing."
         )
+        self.files_button = action_button("Files...", self.show_files)
+        self.files_button.setToolTip("Keep more files together in this Entry, or take one out")
 
         actions_row = QHBoxLayout()
         for widget in (
@@ -210,6 +217,7 @@ class MainWindow(QMainWindow):
 
         views_row = QHBoxLayout()
         for widget in (
+            self.files_button,
             self.history_button,
             self.backups_button,
             self.download_button,
@@ -242,6 +250,7 @@ class MainWindow(QMainWindow):
         top.addWidget(details)
         top.setStretchFactor(0, 1)
         top.setStretchFactor(1, 2)
+        top.setSizes([300, 680])  # wide enough for "Name  -  Live Save Missing" to read whole
 
         body = QSplitter(Qt.Orientation.Vertical)
         body.addWidget(top)
@@ -282,6 +291,7 @@ class MainWindow(QMainWindow):
         self.sidebar.clear()
         for row in self.shown:
             item = QListWidgetItem(f"{row.name}    -    {row.caption}")
+            item.setToolTip(f"{row.name} - {row.caption}")
             item.setData(Qt.ItemDataRole.UserRole, row.entry_id)
             self.sidebar.addItem(item)
             if row.entry_id == selected:
@@ -328,6 +338,7 @@ class MainWindow(QMainWindow):
             self.resolve_button,
             self.bind_button,
             self.unbind_button,
+            self.files_button,
             self.history_button,
             self.backups_button,
             self.download_button,
@@ -337,7 +348,7 @@ class MainWindow(QMainWindow):
         if row is None:
             self.detail_name.setText("No Entry selected")
             self.detail_state.setText("")
-            self.detail_path.setText("")
+            self._show_plain_path("")
             self.detail_hint.setText(
                 "Set up a Cloud Vault, then add an Entry to begin."
                 if not self.app.config.is_set_up
@@ -353,25 +364,40 @@ class MainWindow(QMainWindow):
         self.backups_button.setEnabled(True)
         self.download_button.setEnabled(presenter.downloadable(self.app.paths, row.entry_id))
         self.remove_button.setEnabled(True)
+        self.files_button.setEnabled(
+            row.bound
+            and operations.can_hold_files(self.app.paths, self.app.the_ledger, row.entry_id)
+        )
 
         if row.status is None:
-            self.detail_path.setText("Not bound on this Machine.")
             hints = presenter.bind_hints(self.app.paths, self.app.config, row.entry_id)
-            self.detail_hint.setText(
-                "Other Machines keep it at - click one to bind here with the same folder:"
-                if hints
-                else "Bind it to a folder here to sync it."
-            )
+            if row.bound:
+                # Needs Binding: a file another Machine added has no path here yet.
+                self._show_live(row.entry_id)
+                self.detail_hint.setText(
+                    "Another Machine added a file to this Entry. Bind it here to sync again."
+                )
+            else:
+                self._show_plain_path("Not bound on this Machine.")
+                self.detail_hint.setText(
+                    (
+                        "Other Machines keep these files at - click one to bind here the same way:"
+                        if row.is_file_set
+                        else "Other Machines keep it at - click one to bind here with the same "
+                        "folder:"
+                    )
+                    if hints
+                    else "Bind it here to sync it."
+                )
             self._show_hints(hints)
             self.sync_button.setEnabled(False)
             self.restore_button.setEnabled(False)
             self.resolve_button.setEnabled(False)
             self.bind_button.setEnabled(True)
-            self.unbind_button.setEnabled(False)
+            self.unbind_button.setEnabled(row.bound)
             return
 
-        binding = self.app.the_ledger.require(row.entry_id)
-        self.detail_path.setText(str(binding.live))
+        self._show_live(row.entry_id)
         self.detail_hint.setText(
             "This Entry was removed from the Vault by another Machine. Unbind it here, or "
             "Sync to re-add it."
@@ -385,6 +411,21 @@ class MainWindow(QMainWindow):
         # Unbind moves no data and touches no save, so unlike Sync and Restore it is not
         # gated on the state machine's offers: a bound Entry can always be unbound.
         self.unbind_button.setEnabled(True)
+
+    def _show_plain_path(self, text: str) -> None:
+        self.detail_path.setTextFormat(Qt.TextFormat.PlainText)
+        self.detail_path.setText(text)
+
+    def _show_live(self, entry_id: str) -> None:
+        """The bound path, or a File Set's paths as a list: one bullet per file, so a long
+        path that wraps cannot be mistaken for the start of the next."""
+        lines = presenter.live_lines(self.app.paths, self.app.the_ledger, entry_id)
+        if len(lines) == 1:
+            self._show_plain_path(lines[0])
+            return
+        self.detail_path.setTextFormat(Qt.TextFormat.RichText)
+        items = "".join(f"<li>{html.escape(line)}</li>" for line in lines)
+        self.detail_path.setText(f"<ul style='margin-left: -24px'>{items}</ul>")
 
     def _show_cloud(self) -> None:
         self.cloud_label.setText(presenter.cloud_caption(self.app.cloud, now=datetime.now(UTC)))
@@ -491,7 +532,11 @@ class MainWindow(QMainWindow):
                 row.entry_id,
                 note=note or None,
             )
-        except (operations.SyncAborted, operations.NothingToSync) as error:
+        except (
+            operations.SyncAborted,
+            operations.NothingToSync,
+            operations.NeedsBinding,
+        ) as error:
             log().warning("%s", error)
         self._settled()
 
@@ -534,7 +579,11 @@ class MainWindow(QMainWindow):
                     note=note or None,
                 )
                 done += 1
-            except (operations.SyncAborted, operations.NothingToSync) as error:
+            except (
+                operations.SyncAborted,
+                operations.NothingToSync,
+                operations.NeedsBinding,
+            ) as error:
                 log().warning("%s was not Synced: %s", row.name, error)
         log().info("Pushed %d of %d Entries to the Vault.", done, len(targets))
         self._settled()
@@ -619,7 +668,8 @@ class MainWindow(QMainWindow):
         if row is None or row.status is not None:
             return
         # Widening the sparse cone may lazily fetch this Entry's blobs from the Cloud.
-        dialog = dialogs.BindDialog(
+        kind = dialogs.BindFilesDialog if row.is_file_set else dialogs.BindDialog
+        dialog = kind(
             self.app, row.entry_id, row.name, self, pat=self.store.get_pat(), prefill=prefill
         )
         if dialog.exec():
@@ -628,7 +678,7 @@ class MainWindow(QMainWindow):
     def unbind_selected(self) -> None:
         self.refresh()
         row = self._selected_row()
-        if row is None or row.status is None:
+        if row is None or not row.bound:
             return
         operations.unbind_entry(
             self.app.paths,
@@ -689,6 +739,12 @@ class MainWindow(QMainWindow):
         QApplication.restoreOverrideCursor()
         log().info("Downloaded %s to %s.", row.name, landed)
         dialogs.show_downloaded(self, row.name, landed)
+
+    def show_files(self) -> None:
+        row = self._selected_row()
+        if row is not None and row.bound:
+            dialogs.FilesDialog(self.app, row.entry_id, row.name, self).exec()
+            self._settled()
 
     def show_history(self) -> None:
         row = self._selected_row()

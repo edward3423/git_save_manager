@@ -43,7 +43,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core import backups, cloud, device_flow, github, ledger, operations, redo, vault
+from core import backups, cloud, device_flow, entries, github, ledger, operations, redo, vault
 from core.backups import Backup
 from core.cloud import Side
 from core.credentials import CredentialStore
@@ -536,8 +536,69 @@ def _browse_button(
     return button
 
 
+def _pick_files(parent: QWidget, title: str) -> list[Path]:
+    found, _ = QFileDialog.getOpenFileNames(parent, title)
+    return [Path(path) for path in found]
+
+
+HIDDEN_FILES_TIP = (
+    "Tip: dotfiles such as .yabairc are hidden in the file picker - press Cmd+Shift+. there to "
+    "show them, or type the path."
+    if sys.platform == "darwin"
+    else "Tip: dotfiles such as .bashrc may be hidden in the file picker - you can type the path."
+)
+
+
+def _typed_path(text: str) -> Path:
+    """A path as the user typed it, with `~` meaning their home, as it does in a terminal."""
+    return Path(text.strip()).expanduser()
+
+
+class _PathRow(QWidget):
+    """One path in the Add Entry dialog: a box, a Browse menu, and a way to take it out again."""
+
+    def __init__(self, owner: AddEntryDialog) -> None:
+        super().__init__()
+        self.owner = owner
+        self.edit = QLineEdit()
+        self.edit.textChanged.connect(lambda _: owner.refresh())
+
+        self.browse = QPushButton("Browse...")
+        menu = QMenu(self.browse)
+        self.folder_action = menu.addAction("Folder...", self._pick_folder)
+        menu.addAction("Files...", self._pick_files)
+        self.browse.setMenu(menu)
+
+        self.remove = QPushButton("Remove")
+        self.remove.setToolTip("Leave this file out of the Entry")
+        self.remove.clicked.connect(lambda: owner.remove_row(self))
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.edit)
+        layout.addWidget(self.browse)
+        layout.addWidget(self.remove)
+
+    def _pick_folder(self) -> None:
+        found = _pick_directory(self, "Where does the game keep this save?")
+        if found is not None:
+            self.edit.setText(str(found))
+
+    def _pick_files(self) -> None:
+        found = _pick_files(self, "Which file, or files, should this Entry keep?")
+        if found:
+            self.edit.setText(str(found[0]))
+            for extra in found[1:]:
+                self.owner.add_row().edit.setText(str(extra))
+
+
 class AddEntryDialog(QDialog):
-    """Name a save and point at where it lives on this Machine."""
+    """Name a save and point at where it lives on this Machine.
+
+    One path is a file or folder Entry, as always. Several paths make a **File Set**: separate
+    files, wherever they live, kept together as one Entry - a window manager's `.yabairc` and
+    `.skhdrc`, say - so they are synced, restored and backed up as one.
+    """
 
     def __init__(self, app: App, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -546,17 +607,41 @@ class AddEntryDialog(QDialog):
 
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Elden Ring")
-        self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("the folder (or file) the game writes")
-        browse = _browse_button(self, self.path_edit, "Where does the game keep this save?")
 
-        path_row = QHBoxLayout()
-        path_row.addWidget(self.path_edit)
-        path_row.addWidget(browse)
+        self.rows: list[_PathRow] = []
+        self.rows_layout = QVBoxLayout()
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(6)
+
+        self.add_row_button = QPushButton("Add Another File")
+        self.add_row_button.setToolTip(
+            "Keep several files - in any folders - together as this one Entry"
+        )
+        self.add_row_button.clicked.connect(lambda: self.add_row().edit.setFocus())
+        add_row = QHBoxLayout()
+        add_row.addWidget(self.add_row_button)
+        add_row.addStretch()
+
+        self.set_note = QLabel(
+            "These files become one Entry: synced, restored and backed up together. Each must "
+            "be a file, and no two may share a name."
+        )
+        self.set_note.setObjectName("dimNote")
+        self.set_note.setWordWrap(True)
+        tip = QLabel(HIDDEN_FILES_TIP)
+        tip.setObjectName("dimNote")
+        tip.setWordWrap(True)
+
+        paths_box = QVBoxLayout()
+        paths_box.setSpacing(6)
+        paths_box.addLayout(self.rows_layout)
+        paths_box.addLayout(add_row)
+        paths_box.addWidget(self.set_note)
+        paths_box.addWidget(tip)
 
         form = QFormLayout()
         form.addRow("Name", self.name_edit)
-        form.addRow("Live Save", path_row)
+        form.addRow("Live Save", paths_box)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -566,24 +651,72 @@ class AddEntryDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addSpacing(8)
         layout.addWidget(buttons)
+        self.setMinimumWidth(680)
+
+        self.add_row()
+
+    def add_row(self) -> _PathRow:
+        row = _PathRow(self)
+        self.rows.append(row)
+        self.rows_layout.addWidget(row)
+        self.refresh()
+        return row
+
+    def remove_row(self, row: _PathRow) -> None:
+        self.rows.remove(row)
+        self.rows_layout.removeWidget(row)
+        row.deleteLater()
+        self.refresh()
+        self.adjustSize()
+
+    def refresh(self) -> None:
+        """One row reads as a file or folder; more than one, as files only."""
+        several = len(self.rows) > 1
+        for row in self.rows:
+            row.remove.setVisible(several)
+            # A folder cannot be one of several files, so it is only offered alone.
+            row.folder_action.setVisible(not several)
+            row.edit.setPlaceholderText(
+                "a file to keep in this Entry" if several else "the folder or file the game writes"
+            )
+        self.set_note.setVisible(several)
+
+    def chosen(self) -> list[Path]:
+        return [_typed_path(row.edit.text()) for row in self.rows if row.edit.text().strip()]
 
     def run_add(self) -> None:
         name = self.name_edit.text().strip()
-        raw = self.path_edit.text().strip()
-        if not name or not raw:
+        chosen = self.chosen()
+        if not name or not chosen:
             QMessageBox.warning(self, "Add Entry", "Both a name and a path are needed.")
             return
         try:
-            operations.add_entry(
-                self.app.paths,
-                self.app.config,
-                self.app.description,
-                self.app.the_ledger,
-                name,
-                Path(raw),
-            )
-        except (vault.FileTooLarge, operations.GitRepoNotAllowed, OSError) as error:
+            if len(chosen) == 1:
+                operations.add_entry(
+                    self.app.paths,
+                    self.app.config,
+                    self.app.description,
+                    self.app.the_ledger,
+                    name,
+                    chosen[0],
+                )
+            else:
+                operations.add_file_set(
+                    self.app.paths,
+                    self.app.config,
+                    self.app.description,
+                    self.app.the_ledger,
+                    name,
+                    chosen,
+                )
+        except (
+            vault.FileTooLarge,
+            operations.GitRepoNotAllowed,
+            operations.InvalidFileSet,
+            OSError,
+        ) as error:
             _fail(self, "Add Entry", error)
             return
         QMessageBox.information(
@@ -889,6 +1022,318 @@ class BindDialog(QDialog):
             _fail(self, "Bind", error)
             return
         self.accept()
+
+
+class _MemberRow(QWidget):
+    """One File Set member in the Bind dialog: its name, where it lives here, and a Browse."""
+
+    def __init__(self, member: str, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.member = member
+        self.edit = QLineEdit()
+        self.edit.setPlaceholderText(f"where this Machine keeps (or will keep) {member}")
+
+        browse = QPushButton("Browse...")
+        menu = QMenu(browse)
+        # The folder picker is the one that can name a file that does not exist here yet: the
+        # member's name is appended, which is what every other Machine's copy is called.
+        menu.addAction("Folder (keeps the name)...", self._pick_folder)
+        menu.addAction("File...", self._pick_file)
+        browse.setMenu(menu)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.edit)
+        layout.addWidget(browse)
+
+    def _pick_folder(self) -> None:
+        found = _pick_directory(self, f"Which folder does this Machine keep {self.member} in?")
+        if found is not None:
+            self.edit.setText(str(found / self.member))
+
+    def _pick_file(self) -> None:
+        found = _pick_file(self, f"Which file is {self.member} on this Machine?")
+        if found is not None:
+            self.edit.setText(str(found))
+
+    def chosen(self) -> Path | None:
+        return _typed_path(self.edit.text()) if self.edit.text().strip() else None
+
+
+class BindFilesDialog(QDialog):
+    """Bind a File Set here, one path per file; clicking another Machine fills them all in.
+
+    Each file is bound separately because each may live somewhere else on this Machine - the
+    same `skhdrc` sits at `~/.skhdrc` on one Machine and `~/.config/skhd/skhdrc` on another.
+    For a File Set already bound here that Needs Binding, only the files without a path are
+    asked for; the rest are listed, and kept.
+    """
+
+    MAX_PATH_WIDTH = BindDialog.MAX_PATH_WIDTH
+    MAX_KEPT_WIDTH = 520
+
+    def __init__(
+        self,
+        app: App,
+        entry_id: str,
+        name: str,
+        parent: QWidget | None = None,
+        pat: str | None = None,
+        prefill: presenter.BindHint | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.app = app
+        self.entry_id = entry_id
+        self.pat = pat
+        self.setWindowTitle(f"Bind {name}")
+
+        entry = entries.require(app.paths, entry_id)
+        binding = app.the_ledger.get(entry_id)
+        bound = ledger.live_members(entry, binding) if binding is not None else {}
+        wanted = [member for member in entry.files or () if member not in bound]
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            f"{name} is {len(entry.files or ())} files kept together. Choose where this Machine "
+            "keeps each one - they can be in different folders, and need not exist yet."
+            if not bound
+            else f"{', '.join(wanted)} {'was' if len(wanted) == 1 else 'were'} added to {name} "
+            "on another Machine. Choose where this Machine keeps "
+            f"{'it' if len(wanted) == 1 else 'them'}."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        hints = [h for h in presenter.bind_hints(app.paths, app.config, entry_id) if h.files]
+        self.strip: BindHintStrip | None = None
+        if hints:
+            hint_label = QLabel("Other Machines keep these files at - click one to use the same:")
+            hint_label.setWordWrap(True)
+            layout.addWidget(hint_label)
+            self.strip = BindHintStrip(hints, tooltip="Click to fill in these paths")
+            self.strip.use_requested.connect(self.use_hint)
+            layout.addWidget(self.strip)
+
+        form = QFormLayout()
+        for member, path in bound.items():
+            # Already bound and kept as is: shown, cut in the middle when long, never edited.
+            kept = QLabel()
+            kept.setObjectName("bindPreview")
+            kept.ensurePolished()
+            kept.setText(
+                kept.fontMetrics().elidedText(
+                    str(path), Qt.TextElideMode.ElideMiddle, self.MAX_KEPT_WIDTH
+                )
+            )
+            kept.setToolTip(str(path))
+            form.addRow(member, kept)
+        self.rows = [_MemberRow(member, self) for member in wanted]
+        for row in self.rows:
+            row.edit.textChanged.connect(self._mark_chosen_hint)
+            form.addRow(row.member, row)
+        layout.addLayout(form)
+
+        if hints and self.rows:
+            longest = max(
+                _line_edit_width_for(self.rows[0].edit, path)
+                for hint in hints
+                for path in (hint.files or {}).values()
+            )
+            for row in self.rows:
+                row.edit.setMinimumWidth(min(longest, self.MAX_PATH_WIDTH))
+
+        tip = QLabel(HIDDEN_FILES_TIP)
+        tip.setObjectName("dimNote")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.run_bind)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.setMinimumWidth(max(560, layout.totalMinimumSize().width()))
+
+        if prefill is not None:
+            self.use_hint(prefill)
+
+    def use_hint(self, hint: presenter.BindHint) -> None:
+        """Fill every file's box from another Machine's Binding. Still confirmed by OK."""
+        for row in self.rows:
+            if hint.files and row.member in hint.files:
+                row.edit.setText(hint.files[row.member])
+        if self.rows:
+            self.rows[0].edit.setFocus()
+
+    def _mark_chosen_hint(self, _text: str = "") -> None:
+        if self.strip is None:
+            return
+        typed = {row.member: row.edit.text().strip() for row in self.rows}
+        self.strip.mark_chosen(
+            lambda hint: all((hint.files or {}).get(m) == text for m, text in typed.items())
+        )
+
+    def run_bind(self) -> None:
+        chosen = {row.member: row.chosen() for row in self.rows}
+        missing = [member for member, path in chosen.items() if path is None]
+        if missing:
+            QMessageBox.warning(self, "Bind", f"A path is needed for {', '.join(missing)}.")
+            return
+        existing = [str(path) for path in chosen.values() if path is not None and path.exists()]
+        if existing:
+            answer = QMessageBox.question(
+                self,
+                "Bind",
+                "Already here:\n" + "\n".join(existing) + "\n\nBinding does not move any data. "
+                "Afterwards, Sync uploads these files to the Vault and Restore overwrites them "
+                "with the Vault's copies.\n\nBind here anyway?",
+            )
+            if answer is not QMessageBox.StandardButton.Yes:
+                return
+        try:
+            operations.bind_entry(
+                self.app.paths,
+                self.app.config,
+                self.app.description,
+                self.app.the_ledger,
+                self.entry_id,
+                {member: path for member, path in chosen.items() if path is not None},
+                pat=self.pat,
+            )
+        except (operations.InvalidFileSet, vault.FileTooLarge, OSError) as error:
+            _fail(self, "Bind", error)
+            return
+        self.accept()
+
+
+class FilesDialog(QDialog):
+    """The files an Entry keeps together: add one, or take one out.
+
+    Each change is its own commit, made the moment it is confirmed - like Rename, it moves no
+    save data. A file added here is captured by the next Sync. A file taken out leaves the
+    Vault for every Machine but stays in History, and the file itself is never touched.
+    """
+
+    def __init__(self, app: App, entry_id: str, name: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.app = app
+        self.entry_id = entry_id
+        self.name = name
+        self.setWindowTitle(f"Files of {name}")
+
+        self.listing = QListWidget()
+        self.listing.setObjectName("filesList")
+        # Paths of one Entry often share a long prefix, so the middle is what gets cut: each
+        # row keeps its file name in front and the path's own tail, with the rest on hover.
+        self.listing.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.listing.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self.listing.currentRowChanged.connect(lambda _: self._refresh_buttons())
+
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("a file to keep in this Entry too")
+        self.path_edit.textChanged.connect(lambda _: self._refresh_buttons())
+        browse = QPushButton("Browse...")
+        browse.clicked.connect(self._browse)
+        self.add_button = QPushButton("Add File")
+        self.add_button.clicked.connect(self.run_add)
+        add_row = QHBoxLayout()
+        add_row.addWidget(self.path_edit)
+        add_row.addWidget(browse)
+        add_row.addWidget(self.add_button)
+
+        tip = QLabel(HIDDEN_FILES_TIP)
+        tip.setObjectName("dimNote")
+        tip.setWordWrap(True)
+
+        self.remove_button = QPushButton("Remove from Entry")
+        self.remove_button.clicked.connect(self.run_remove)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        bottom = QHBoxLayout()
+        bottom.addWidget(self.remove_button)
+        bottom.addStretch()
+        bottom.addWidget(close)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.listing)
+        layout.addLayout(add_row)
+        layout.addWidget(tip)
+        layout.addLayout(bottom)
+        self.resize(620, 340)
+        self._load()
+
+    def _load(self) -> None:
+        self.members: list[str] = []
+        self.listing.clear()
+        entry = entries.require(self.app.paths, self.entry_id)
+        lines = presenter.live_lines(self.app.paths, self.app.the_ledger, self.entry_id)
+        if entry.is_file_set:
+            self.members = list(entry.files or ())
+            names = self.members
+        else:
+            names = [entry.content_name or Path(lines[0]).name]
+        for name, line in zip(names, lines, strict=True):
+            shown = line if line.startswith(name) else f"{name}    {line}"
+            item = QListWidgetItem(shown)
+            item.setToolTip(line)
+            self.listing.addItem(item)
+        self._refresh_buttons()
+
+    def _refresh_buttons(self) -> None:
+        self.add_button.setEnabled(bool(self.path_edit.text().strip()))
+        # The last file stays: an Entry with none is Remove from Vault, which says so.
+        self.remove_button.setEnabled(len(self.members) > 1 and self.listing.currentRow() >= 0)
+
+    def _browse(self) -> None:
+        found = _pick_file(self, f"Which file should {self.name} keep too?")
+        if found is not None:
+            self.path_edit.setText(str(found))
+
+    def run_add(self) -> None:
+        path = _typed_path(self.path_edit.text())
+        try:
+            operations.add_file(
+                self.app.paths,
+                self.app.config,
+                self.app.description,
+                self.app.the_ledger,
+                self.entry_id,
+                path,
+            )
+        except (operations.InvalidFileSet, vault.FileTooLarge, OSError) as error:
+            _fail(self, "Add File", error)
+            return
+        self.path_edit.clear()
+        self._load()
+
+    def run_remove(self) -> None:
+        index = self.listing.currentRow()
+        if not 0 <= index < len(self.members):
+            return
+        member = self.members[index]
+        answer = QMessageBox.question(
+            self,
+            "Remove from Entry",
+            f"Take {member} out of {self.name}, for every Machine?\n\n"
+            "The file itself is not touched, here or anywhere. Its copy leaves the Vault and "
+            "stays recoverable from History.",
+        )
+        if answer is not QMessageBox.StandardButton.Yes:
+            return
+        try:
+            operations.remove_file(
+                self.app.paths,
+                self.app.config,
+                self.app.description,
+                self.app.the_ledger,
+                self.entry_id,
+                member,
+            )
+        except operations.InvalidFileSet as error:
+            _fail(self, "Remove from Entry", error)
+            return
+        self._load()
 
 
 class SyncDialog(QDialog):

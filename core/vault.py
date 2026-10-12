@@ -146,13 +146,13 @@ def read_marker(paths: Paths) -> Marker:
 def machine_file_contents(
     config: Config,
     description: MachineDescription,
-    bindings: dict[str, str] | None = None,
+    bindings: dict[str, str | dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """This Machine's published file. Exactly one writer, so it can never conflict (ADR-0003).
 
-    `bindings` (entry id -> live path) is what lets another Machine's Bind dialog say "the
-    laptop keeps this save at ..." as a read-only hint. Paths on someone else's disk are
-    never acted on, only shown.
+    `bindings` (entry id -> live path, or a File Set's member -> live path map) is what lets
+    another Machine's Bind dialog say "the laptop keeps this save at ..." as a read-only hint.
+    Paths on someone else's disk are never acted on, only shown.
     """
     return {
         "schema": SCHEMA,
@@ -182,7 +182,7 @@ def write_machine_file(
     paths: Paths,
     config: Config,
     description: MachineDescription,
-    bindings: dict[str, str] | None = None,
+    bindings: dict[str, str | dict[str, str]] | None = None,
 ) -> None:
     write_json(
         paths.machine_file(config.machine_id),

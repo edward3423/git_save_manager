@@ -188,17 +188,22 @@ def test_the_preview_names_every_file_operation_and_the_backup(machine):
     Backup will be taken. One renderer, used by every destructive dialog."""
     from pathlib import Path
 
-    from core.transaction import Change, FileChange, Preview
+    from core.transaction import Change, FileChange, PartPreview, Preview
 
     preview = Preview(
         entry_id="e",
-        live_path=Path("C:/saves/Elden Ring"),
-        target_path=Path("C:/saves/Elden Ring"),
         reason="restore",
-        changes=(
-            FileChange("slot1.sav", Change.REPLACE, 2048),
-            FileChange("slot2.sav", Change.ADD, 512),
-            FileChange("old.sav", Change.REMOVE, 100),
+        parts=(
+            PartPreview(
+                None,
+                Path("C:/saves/Elden Ring"),
+                Path("C:/saves/Elden Ring"),
+                (
+                    FileChange("slot1.sav", Change.REPLACE, 2048),
+                    FileChange("slot2.sav", Change.ADD, 512),
+                    FileChange("old.sav", Change.REMOVE, 100),
+                ),
+            ),
         ),
         live_hash="aaa",
         source_hash="bbb",
@@ -208,7 +213,7 @@ def test_the_preview_names_every_file_operation_and_the_backup(machine):
     lines = presenter.preview_lines(preview)
 
     assert lines == [
-        f"This will write to {preview.live_path}:",
+        f"This will write to {preview.parts[0].live_path}:",
         "  ~ overwrite  slot1.sav  (2.0 KB)",
         "  + add        slot2.sav  (512 B)",
         "  - delete     old.sav  (100 B)",
@@ -223,15 +228,17 @@ def test_a_bulk_preview_names_every_entry_and_reuses_the_single_entry_rendering(
     write differently from the dialog that approves the same write one at a time."""
     from pathlib import Path
 
-    from core.transaction import Change, FileChange, Preview
+    from core.transaction import Change, FileChange, PartPreview, Preview
 
     def preview(live: str, will_back_up: bool) -> Preview:
         return Preview(
             entry_id=live,
-            live_path=Path(live),
-            target_path=Path(live),
             reason="restore",
-            changes=(FileChange("slot1.sav", Change.REPLACE, 2048),),
+            parts=(
+                PartPreview(
+                    None, Path(live), Path(live), (FileChange("slot1.sav", Change.REPLACE, 2048),)
+                ),
+            ),
             live_hash="aaa",
             source_hash="bbb",
             will_back_up=will_back_up,
@@ -255,14 +262,19 @@ def test_a_bulk_preview_names_every_entry_and_reuses_the_single_entry_rendering(
 def test_a_bulk_preview_of_one_entry_says_entry_not_entries():
     from pathlib import Path
 
-    from core.transaction import Change, FileChange, Preview
+    from core.transaction import Change, FileChange, PartPreview, Preview
 
     only = Preview(
         entry_id="e",
-        live_path=Path("C:/saves/Hades"),
-        target_path=Path("C:/saves/Hades"),
         reason="restore",
-        changes=(FileChange("slot1.sav", Change.ADD, 10),),
+        parts=(
+            PartPreview(
+                None,
+                Path("C:/saves/Hades"),
+                Path("C:/saves/Hades"),
+                (FileChange("slot1.sav", Change.ADD, 10),),
+            ),
+        ),
         live_hash=None,
         source_hash="bbb",
         will_back_up=False,
@@ -274,14 +286,19 @@ def test_a_bulk_preview_of_one_entry_says_entry_not_entries():
 def test_the_preview_says_when_there_is_nothing_to_back_up():
     from pathlib import Path
 
-    from core.transaction import Change, FileChange, Preview
+    from core.transaction import Change, FileChange, PartPreview, Preview
 
     preview = Preview(
         entry_id="e",
-        live_path=Path("C:/saves/Hades"),
-        target_path=Path("C:/saves/Hades"),
         reason="restore",
-        changes=(FileChange("save.dat", Change.ADD, 10),),
+        parts=(
+            PartPreview(
+                None,
+                Path("C:/saves/Hades"),
+                Path("C:/saves/Hades"),
+                (FileChange("save.dat", Change.ADD, 10),),
+            ),
+        ),
         live_hash=None,
         source_hash="bbb",
         will_back_up=False,

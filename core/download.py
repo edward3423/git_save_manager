@@ -16,6 +16,10 @@ held, so its Download needs no network at all.
 
 ## Never overwrite
 
+A File Set lands as a folder named after the Entry, holding its files under their member
+names - the files of one Entry belong together, and scattering them loose in Downloads would
+lose that.
+
 Nothing that already exists at the destination is replaced: a taken name gets a numbered
 sibling (`Hades (1)`), as a browser does. The content is unpacked into a hidden staging
 directory beside the destination first and renamed into place only when complete, so an
@@ -24,6 +28,7 @@ interrupted Download never leaves a half-written folder under the real name.
 
 from __future__ import annotations
 
+import re
 import shutil
 import tarfile
 import tempfile
@@ -55,10 +60,8 @@ def download(paths: Paths, entry_id: str, destination_dir: Path, pat: str | None
     """Copy the Entry's Vault content into `destination_dir`, and return where it landed."""
     entry = entries.require(paths, entry_id)
     repo = vault.git(paths)
-    if (
-        entry.content_name is None
-        or not repo.run("ls-tree", "HEAD", "--", f"entries/{entry_id}/{entry.content_name}").strip()
-    ):
+    stored = stored_items(repo, entry)
+    if not stored:
         raise NothingToDownload(
             f"The Vault holds nothing for {entry.name} yet: no Machine has Synced it."
         )
@@ -88,17 +91,43 @@ def download(paths: Paths, entry_id: str, destination_dir: Path, pat: str | None
             f"--output={archive}",
             f"HEAD:entries/{entry_id}",
             "--",
-            entry.content_name,
+            *stored,
         )
         unpacked = staging / "content"
         with tarfile.open(archive) as tar:
             # `data` refuses absolute paths, links out of the tree, and device files.
             tar.extractall(unpacked, filter="data")
-        target = free_name(destination_dir, entry.content_name)
-        (unpacked / entry.content_name).rename(target)
+        if entry.is_file_set:
+            target = free_name(destination_dir, folder_name(entry.name, entry_id))
+            unpacked.rename(target)
+        else:
+            target = free_name(destination_dir, stored[0])
+            (unpacked / stored[0]).rename(target)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return target
+
+
+def stored_items(repo: Git, entry: entries.Entry) -> list[str]:
+    """The names under `entries/<id>/` that Download copies, as committed at HEAD: the one file
+    or folder, or every File Set member the Vault holds. Reads the tree; fetches nothing."""
+    wanted = entry.files if entry.is_file_set else [entry.content_name]
+    wanted = [name for name in wanted or () if name]
+    if not wanted:
+        return []
+    prefix = f"entries/{entry.entry_id}/"
+    listed = repo.run("ls-tree", "--name-only", "HEAD", "--", *(prefix + n for n in wanted))
+    held = {line.removeprefix(prefix) for line in listed.splitlines()}
+    return [name for name in wanted if name in held]
+
+
+_UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def folder_name(name: str, fallback: str) -> str:
+    """A Display Name made safe to use as a folder name on any OS (ADR-0004 lists what is not)."""
+    cleaned = _UNSAFE.sub("_", name).strip().rstrip(". ")
+    return cleaned or fallback
 
 
 def missing_blobs(repo: Git, entry_id: str) -> list[str]:

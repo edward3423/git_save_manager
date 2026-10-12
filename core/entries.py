@@ -19,7 +19,8 @@ from typing import Any
 from core.jsonstore import read_json, write_json
 from core.paths import Paths
 
-SCHEMA = 2
+SCHEMA = 3
+"""3 added File Sets (`files`). An older build reads a File Set as an Entry with no content."""
 
 
 class UnknownEntry(KeyError):
@@ -38,12 +39,29 @@ class Entry:
     pointed at, and `entries/<id>` itself is always a directory the sparse cone (ADR-0002) can
     select, never a bare file it would refuse. `None` until the first Sync reveals the name.
     """
+    files: list[str] | None = None
+    """Set for a **File Set**: the member names of several individual files that are one Entry.
+
+    Each member is stored flat at `entries/<id>/<member>`, and each Machine binds each member
+    to its own path, so the files can live in unrelated folders (`~/.skhdrc`, `~/.yabairc`)
+    and in different places on different Machines. The Entry is still one unit: one state,
+    one Sync, one Backup, one Restore. A member name is fixed once chosen - it is the file's
+    identity in the Vault - so the same member may have another basename on another disk.
+
+    Mutually exclusive with `content_name`. Members are files only; a folder is its own Entry.
+    """
     schema: int = SCHEMA
+
+    @property
+    def is_file_set(self) -> bool:
+        return self.files is not None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {"schema": self.schema, "name": self.name}
         if self.content_name is not None:
             data["content_name"] = self.content_name
+        if self.files is not None:
+            data["files"] = list(self.files)
         return data
 
 
@@ -66,9 +84,25 @@ def content_path(paths: Paths, entry: Entry) -> Path:
 
     Before the first Sync the name is unknown; this then points at the empty Entry directory,
     which holds no content and so hashes as absent - the correct answer for a never-synced Entry.
+
+    A File Set has no single item: this is the folder its members sit in, and its content is
+    hashed member by member (`vault_members`), never as that whole folder.
     """
     base = paths.entry_content_dir(entry.entry_id)
     return base / entry.content_name if entry.content_name else base
+
+
+def vault_members(paths: Paths, entry: Entry) -> dict[str, Path]:
+    """A File Set's members in the Vault working tree: member name -> its stored file."""
+    base = paths.entry_content_dir(entry.entry_id)
+    return {name: base / name for name in entry.files or ()}
+
+
+def same_name(a: str, b: str) -> bool:
+    """Whether two member names would collide on disk. macOS and Windows compare names
+    case-insensitively while Git does not (ADR-0004), so `Config` and `config` are one file
+    to the OS and two to Git - and must never both be members of one File Set."""
+    return a.casefold() == b.casefold()
 
 
 def read(paths: Paths, entry_id: str) -> Entry | None:
@@ -79,6 +113,7 @@ def read(paths: Paths, entry_id: str) -> Entry | None:
         entry_id=entry_id,
         name=data.get("name", entry_id),
         content_name=data.get("content_name"),
+        files=list(data["files"]) if "files" in data else None,
         schema=data.get("schema", 0),
     )
 

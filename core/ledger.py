@@ -19,6 +19,7 @@ records what moved between the Live Save and the Vault (ADR-0001).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -26,12 +27,14 @@ from pathlib import Path
 from typing import Any
 
 from core import entries, entry_state
+from core.entries import Entry
 from core.entry_state import EntryStatus
-from core.hashing import HashCache
+from core.hashing import HashCache, file_set_hash
 from core.jsonstore import read_json, write_json
 from core.paths import Paths
 
-SCHEMA = 1
+SCHEMA = 2
+"""2 added File Set Bindings (`files`)."""
 
 
 class SyncDirection(StrEnum):
@@ -52,7 +55,15 @@ class Binding:
     """One Entry, as this Machine knows it."""
 
     entry_id: str
-    live_path: str
+    live_path: str | None = None
+    """Where a file or folder Entry lives here. `None` for a File Set."""
+
+    files: dict[str, str] | None = None
+    """Where each member of a File Set lives here: member name -> path. `None` otherwise.
+
+    A member missing from this map is not bound on this Machine yet - typically one another
+    Machine added to the set since. Such an Entry Needs Binding and is not synced until it is.
+    """
 
     baseline: str | None = None
     """Content hash at the last completed Sync. `None` until one completes."""
@@ -62,7 +73,15 @@ class Binding:
 
     @property
     def live(self) -> Path:
+        """The bound path of a file or folder Entry. Not meaningful for a File Set."""
+        if self.live_path is None:
+            raise TypeError(f"{self.entry_id} is a File Set; it has no single live path")
         return Path(self.live_path)
+
+    @property
+    def published(self) -> str | dict[str, str]:
+        """What this Binding looks like in the Machine's published file."""
+        return dict(self.files) if self.files is not None else str(self.live_path)
 
 
 def normalize_live_path(live_path: Path | str) -> str:
@@ -103,6 +122,43 @@ class Ledger:
         """
         binding = Binding(entry_id=entry_id, live_path=normalize_live_path(live_path))
         self.bindings[entry_id] = binding
+        return binding
+
+    def bind_files(self, entry_id: str, files: Mapping[str, Path | str]) -> Binding:
+        """Bind a File Set: each member to a path on this Machine. Like `bind`, no Baseline."""
+        binding = Binding(
+            entry_id=entry_id,
+            files={name: normalize_live_path(path) for name, path in files.items()},
+        )
+        self.bindings[entry_id] = binding
+        return binding
+
+    def set_member(self, entry_id: str, name: str, live_path: Path | str) -> Binding:
+        """Bind one member of a bound File Set, keeping its Baseline.
+
+        The Baseline survives because it is still true: it records what the set held at the
+        last Sync, and binding a path for one more member moves no data. If the new member's
+        content differs from the Vault's, the state machine says so from that Baseline.
+        """
+        binding = self.require(entry_id)
+        if binding.files is None:
+            raise TypeError(f"{entry_id} is not a File Set")
+        binding.files[name] = normalize_live_path(live_path)
+        return binding
+
+    def drop_member(self, entry_id: str, name: str) -> None:
+        """Forget where one member lives here. Touches no file."""
+        binding = self.get(entry_id)
+        if binding is not None and binding.files is not None:
+            binding.files.pop(name, None)
+
+    def to_file_set(self, entry_id: str, member: str) -> Binding:
+        """Turn a single-file Binding into a File Set Binding of that one member, keeping its
+        Baseline: the hash of a one-member File Set *is* the single-file hash
+        (`hashing.file_set_hash`), so the record is exactly as true afterwards."""
+        binding = self.require(entry_id)
+        binding.files = {member: str(binding.live_path)}
+        binding.live_path = None
         return binding
 
     def unbind(self, entry_id: str) -> None:
@@ -196,20 +252,61 @@ def refresh(
     """
     binding = ledger.require(entry_id)
     entry = entries.read(paths, entry_id)
-    vault_path = (
-        entries.content_path(paths, entry)
-        if entry is not None
-        else paths.entry_content_dir(entry_id)
-    )
-    status = entry_state.evaluate_entry(
-        live_path=binding.live,
-        vault_path=vault_path,
-        baseline=binding.baseline,
-        cache=cache,
-    )
+    if entry is not None and entry.is_file_set:
+        # A member that is missing, or not bound here, makes the whole Live side absent: a
+        # File Set short of one file is a missing save, never a smaller one (ADR-0006).
+        status = entry_state.evaluate(
+            live=file_set_hash(live_members(entry, binding), cache, complete=True)
+            if not unbound_members(entry, binding)
+            else None,
+            vault=file_set_hash(entries.vault_members(paths, entry), cache),
+            baseline=binding.baseline,
+        )
+    else:
+        vault_path = (
+            entries.content_path(paths, entry)
+            if entry is not None
+            else paths.entry_content_dir(entry_id)
+        )
+        status = entry_state.evaluate_entry(
+            live_path=binding.live,
+            vault_path=vault_path,
+            baseline=binding.baseline,
+            cache=cache,
+        )
 
     if status.baseline_repair is not None:
         ledger.repair_baseline(entry_id, status.baseline_repair)
         save(paths, ledger)
 
     return status
+
+
+def live_members(entry: Entry, binding: Binding) -> dict[str, Path]:
+    """A File Set's members as bound on this Machine: member name -> path. Members the set no
+    longer has are left out; members not bound here are missing (see `unbound_members`).
+
+    A Binding made before the Entry became a File Set (on another Machine) holds one plain
+    path. It is read as the member of the same name - the name a single-file Entry is stored
+    under - and as nothing at all otherwise, so it can never be taken for a different file.
+    """
+    if binding.files is not None:
+        bound = binding.files
+    elif binding.live_path is not None:
+        bound = {Path(binding.live_path).name: binding.live_path}
+    else:
+        bound = {}
+    return {name: Path(bound[name]) for name in entry.files or () if name in bound}
+
+
+def unbound_members(entry: Entry, binding: Binding | None) -> list[str]:
+    """The File Set members this Machine has no path for. Empty for any other Entry."""
+    if not entry.is_file_set:
+        return []
+    bound = live_members(entry, binding) if binding is not None else {}
+    return [name for name in entry.files or () if name not in bound]
+
+
+def live_layout(entry: Entry, binding: Binding) -> Path | dict[str, Path]:
+    """Where the Entry's Live Save is on this Machine, in the shape the write path takes."""
+    return live_members(entry, binding) if entry.is_file_set else binding.live

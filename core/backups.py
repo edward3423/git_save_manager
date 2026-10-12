@@ -24,6 +24,7 @@ import os
 import re
 import stat
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,10 +42,13 @@ _NAME = re.compile(r"^(?P<stamp>\d{8}T\d{6}Z)(?:-(?P<counter>\d+))?-(?P<reason>[
 
 DIRECTORY = b"gsm-dir"
 SINGLE_FILE = b"gsm-file"
+FILE_SET = b"gsm-files"
 """The archive comment records which kind of Entry this was.
 
 A one-file directory and a single-file Entry hold the same bytes and must not restore as one
-another - the first is a folder containing a save, the second *is* the save.
+another - the first is a folder containing a save, the second *is* the save. A File Set's
+archive holds each member file under its member name, and each is restored to that member's
+own Live Save path, wherever on this disk it lives.
 """
 
 
@@ -98,15 +102,24 @@ def archive_hash(path: Path) -> str | None:
 
 
 def contents(path: Path) -> dict[str, int]:
-    """Relative posix path -> uncompressed size, for the restore preview."""
+    """Relative posix path -> uncompressed size, for the restore preview. For a File Set's
+    archive the paths are its member names."""
     with zipfile.ZipFile(path) as archive:
         return {info.filename: info.file_size for info in _members(archive)}
 
 
-def _write_archive(destination: Path, live: Path) -> None:
-    """Zip a Live Save. Symlinks are stored as links, never as the content they point at."""
+def _write_archive(destination: Path, live: Path | Mapping[str, Path]) -> None:
+    """Zip a Live Save. Symlinks are stored as links, never as the content they point at.
+
+    A File Set arrives as member name -> resolved file, holding only the members present on
+    disk: those are what the write is about to overwrite, and so what must be kept.
+    """
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
-        if live.is_dir() and not live.is_symlink():
+        if isinstance(live, Mapping):
+            archive.comment = FILE_SET
+            for name, path in sorted(live.items()):
+                archive.write(path, name)
+        elif live.is_dir() and not live.is_symlink():
             archive.comment = DIRECTORY
             for current, dirs, files in os.walk(live, followlinks=False):
                 dirs.sort()
@@ -132,12 +145,21 @@ def _add(archive: zipfile.ZipFile, source: Path, arcname: str) -> None:
         archive.write(source, arcname)
 
 
-def extract(backup: Backup | Path, destination: Path) -> None:
-    """Materialize an archive's contents at `destination`, recreating symlinks as links."""
+def extract(backup: Backup | Path, destination: Path, member: str | None = None) -> None:
+    """Materialize an archive's contents at `destination`, recreating symlinks as links.
+
+    `member` picks one file out of a File Set's archive and writes it *as* `destination`,
+    since each member is restored to its own Live Save path.
+    """
     path = backup.path if isinstance(backup, Backup) else backup
 
     with zipfile.ZipFile(path) as archive:
         members = _members(archive)
+
+        if member is not None:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _extract_one(archive, archive.getinfo(member), destination)
+            return
 
         if archive.comment == SINGLE_FILE:
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -173,14 +195,15 @@ def _unique_path(folder: Path, stamp: str, reason: str) -> Path:
 def create(
     paths: Paths,
     entry_id: str,
-    live: Path,
+    live: Path | Mapping[str, Path],
     reason: str,
     expected_hash: str,
     at: datetime | None = None,
 ) -> Backup:
     """Archive a Live Save, and refuse to return one that does not hash back to it.
 
-    `expected_hash` is the caller's `content_hash` of the very bytes it is about to overwrite.
+    `expected_hash` is the caller's `content_hash` of the very bytes it is about to overwrite
+    (for a File Set, `file_set_hash` of the members it maps).
     We re-derive the hash from *inside the finished archive* and require a match, so a backup
     is never merely assumed to have worked. A failed verification deletes the archive and
     raises: better to abort the operation with the save untouched than to proceed protected
@@ -202,7 +225,7 @@ def create(
         found = archive_hash(staging)
         if found != expected_hash:
             raise BackupUnverified(
-                f"The backup of {live} does not match the save it was taken from "
+                f"The backup of {_describe_live(live)} does not match the save it was taken from "
                 f"(expected {expected_hash}, archive holds {found}). Nothing has been "
                 "overwritten. The Live Save may be changing on disk - close the game."
             )
@@ -213,6 +236,12 @@ def create(
         raise
 
     return _describe(destination, entry_id)
+
+
+def _describe_live(live: Path | Mapping[str, Path]) -> str:
+    return (
+        ", ".join(str(path) for path in live.values()) if isinstance(live, Mapping) else str(live)
+    )
 
 
 def _describe(path: Path, entry_id: str) -> Backup:

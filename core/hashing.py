@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
@@ -168,6 +168,42 @@ def hash_entry(path: Path, cache: HashCache | None = None) -> str:
     if path.is_dir() and not path.is_symlink():
         return hash_directory(path, cache)
     return directory_digest([(path.name, hash_file(path, cache))])
+
+
+def file_set_hash(
+    members: Mapping[str, Path],
+    cache: HashCache | None = None,
+    complete: bool = False,
+) -> str | None:
+    """Content hash of a File Set: several individual files that are one Entry.
+
+    Each member is hashed under its *member name* - its name in the Vault - not under the
+    basename it happens to have on this disk, so `~/.config/skhd/skhdrc` here and `~/.skhdrc`
+    on another Machine are the same member holding the same content. The Vault stores the
+    members flat, `entries/<id>/<member>`, so this is exactly `hash_directory` of that folder,
+    and a File Set of one is exactly the single-file `hash_entry`: a single-file Entry that
+    grows a second file keeps its Baseline meaningful.
+
+    Members holding no content - absent, or a folder where a file belongs - are left out.
+    With `complete`, any such member makes the whole answer `None` instead: that is the state
+    machine's question, where a File Set missing one file must read as *missing*, never as a
+    smaller set - otherwise a Sync would commit the absence and erase that file from the Vault
+    (ADR-0006). The write path asks without `complete`, because it must still back up and
+    compare whatever members *are* there.
+
+    A member that is a symlink is followed, exactly as an Entry's root is in `content_hash`:
+    dotfiles are routinely links into a dotfiles repository, and the user bound the file the
+    link leads to.
+    """
+    found: list[tuple[str, str]] = []
+    for name, path in members.items():
+        target = path.resolve() if path.is_symlink() else path
+        if not target.is_file():
+            if complete:
+                return None
+            continue
+        found.append((name, hash_file(target, cache)))
+    return directory_digest(found) if found else None
 
 
 def content_hash(path: Path, cache: HashCache | None = None) -> str | None:

@@ -238,7 +238,7 @@ def arm(monkeypatch, paths: Paths, point: str) -> None:
 
     elif point == CRASH_POINTS[1]:
 
-        def materialize(self, destination):
+        def materialize(self, member, destination):
             # A torn copy: the first file lands, the rest never does.
             destination.mkdir(parents=True)
             (destination / "slot1.sav").write_text(NEW["slot1.sav"], encoding="utf-8")

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePath, PurePosixPath, PureWindowsPath
 
-from core import entries, ledger, operations, redo, vault
+from core import download, entries, ledger, operations, redo, transaction, vault
 from core.cloud import Cloud, CloudState
 from core.config import Config
 from core.entry_state import Action, EntryState, EntryStatus
@@ -33,6 +33,11 @@ STATE_CAPTIONS = {
 UNLINKED = "Unlinked"
 """Visible but unsyncable: hiding an Unlinked Entry would conceal that Vault data exists."""
 
+NEEDS_BINDING = "Needs Binding"
+"""A File Set bound here, with a file another Machine added that has no path here yet. Like
+Unlinked, it has no state until it is bound: moving the other files alone would treat the set
+as smaller than it is."""
+
 
 @dataclass(frozen=True)
 class Row:
@@ -42,20 +47,60 @@ class Row:
     name: str
     caption: str
     status: EntryStatus | None
-    """None when Unlinked: without a Binding there is no live path to derive a state from."""
+    """None when Unlinked or Needs Binding: without a path for every file there is no Live
+    Save to derive a state from."""
+
+    bound: bool = False
+    """Whether this Machine has a Binding at all - true for Needs Binding, which can be
+    unbound, and false for Unlinked."""
+
+    is_file_set: bool = False
 
 
 def rows(paths: Paths, the_ledger: Ledger) -> list[Row]:
     """Every Entry in the Vault, bound or not, in the sidebar's order."""
     found = []
     for entry in entries.list_all(paths):
-        if entry.entry_id in the_ledger.bindings:
+        binding = the_ledger.get(entry.entry_id)
+        if binding is None:
+            status, caption = None, UNLINKED
+        elif ledger.unbound_members(entry, binding):
+            status, caption = None, NEEDS_BINDING
+        else:
             status = ledger.refresh(paths, the_ledger, entry.entry_id)
             caption = STATE_CAPTIONS[status.state]
+        found.append(
+            Row(
+                entry_id=entry.entry_id,
+                name=entry.name,
+                caption=caption,
+                status=status,
+                bound=binding is not None,
+                is_file_set=entry.is_file_set,
+            )
+        )
+    return found
+
+
+def live_lines(paths: Paths, the_ledger: Ledger, entry_id: str) -> list[str]:
+    """Where the Entry lives on this Machine, one line per path, for the details panel.
+
+    A File Set lists each file, and says which is missing - the state alone says only that
+    one is - or, for one with no path here yet, names it by its member name.
+    """
+    entry = entries.require(paths, entry_id)
+    binding = the_ledger.require(entry_id)
+    if not entry.is_file_set:
+        return [str(binding.live)]
+    bound = ledger.live_members(entry, binding)
+    found = []
+    for name in entry.files or ():
+        if name not in bound:
+            found.append(f"{name} - not bound on this Machine")
+        elif not transaction.resolve_target(bound[name]).is_file():
+            found.append(f"{bound[name]} (missing)")
         else:
-            status = None
-            caption = UNLINKED
-        found.append(Row(entry_id=entry.entry_id, name=entry.name, caption=caption, status=status))
+            found.append(str(bound[name]))
     return found
 
 
@@ -174,19 +219,35 @@ def preview_lines(preview: Preview) -> list[str]:
     """Every path a write would touch, and where the Backup lands - Invariant 7, as text.
 
     One renderer for every destructive dialog: Restore, conflict resolution toward the
-    Vault, and Backup restore all show exactly this.
+    Vault, and Backup restore all show exactly this. A File Set's files live in unrelated
+    folders, so each is named by its full path rather than relative to one folder.
     """
-    if preview.is_noop:
-        return [
-            f"{preview.live_path} already holds exactly this content.",
-            "Nothing will be written, and no Backup is needed.",
+    if not preview.is_file_set:
+        live_path = preview.parts[0].live_path
+        if preview.is_noop:
+            return [
+                f"{live_path} already holds exactly this content.",
+                "Nothing will be written, and no Backup is needed.",
+            ]
+        found = [f"This will write to {live_path}:"]
+        found += [
+            f"  {CHANGE_WORDS[change.change]}  {change.path}  ({size_text(change.size_bytes)})"
+            for change in preview.changes
+        ]
+    else:
+        if preview.is_noop:
+            return [
+                "These files already hold exactly this content:",
+                *(f"  {part.live_path}" for part in preview.parts),
+                "Nothing will be written, and no Backup is needed.",
+            ]
+        found = ["This will write:"]
+        found += [
+            f"  {CHANGE_WORDS[change.change]}  {part.live_path}  ({size_text(change.size_bytes)})"
+            for part in preview.parts
+            for change in part.changes
         ]
 
-    found = [f"This will write to {preview.live_path}:"]
-    found += [
-        f"  {CHANGE_WORDS[change.change]}  {change.path}  ({size_text(change.size_bytes)})"
-        for change in preview.changes
-    ]
     found.append("")
     found.append(
         "The current Live Save is archived to a Backup first."
@@ -252,7 +313,7 @@ def bind_file_name(paths: Paths, entry_id: str) -> str | None:
     one whose content is a folder - and the dialog keeps asking folder-or-file.
     """
     entry = entries.read(paths, entry_id)
-    if entry is None or entry.content_name is None:
+    if entry is None or entry.is_file_set or entry.content_name is None:
         return None
     if not vault.content_is_file(paths, entry_id, entry.content_name):
         return None
@@ -271,6 +332,10 @@ class BindHint:
     hostname: str
     os_name: str
     path: str
+    """The published path; for a File Set, every file's path, one per line."""
+
+    files: dict[str, str] | None = None
+    """For a File Set: member name -> the path that Machine keeps it at."""
 
     @property
     def machine(self) -> str:
@@ -305,17 +370,26 @@ def bind_hints(paths: Paths, config: Config, entry_id: str) -> list[BindHint]:
     Shown in the Bind dialog so the user on a second Machine can see 'the laptop keeps this
     at C:\\...' while choosing a folder here. This Machine's own Binding is not a hint.
     """
+    entry = entries.read(paths, entry_id)
+    order = list(entry.files or ()) if entry is not None else []
     found = []
     for machine in vault.list_machines(paths):
         if machine.get("machine_id") == config.machine_id:
             continue
         published = machine.get("bindings", {})
         if entry_id in published:
+            value = published[entry_id]
+            files = None
+            if isinstance(value, dict):
+                # In the Entry's own order, so the card lines up with the Bind dialog's rows.
+                ranked = sorted(value, key=lambda m: order.index(m) if m in order else len(order))
+                files = {str(m): str(value[m]) for m in ranked}
             found.append(
                 BindHint(
                     hostname=machine.get("hostname", "?"),
                     os_name=machine.get("os", "?"),
-                    path=str(published[entry_id]),
+                    path="\n".join(files.values()) if files is not None else str(value),
+                    files=files,
                 )
             )
     return found
@@ -328,8 +402,6 @@ def downloadable(paths: Paths, entry_id: str) -> bool:
     False for an Entry no Machine has Synced yet, and for one removed from the Vault.
     """
     entry = entries.read(paths, entry_id)
-    if entry is None or entry.content_name is None:
+    if entry is None:
         return False
-    return bool(
-        vault.git(paths).run("ls-tree", "HEAD", "--", f"entries/{entry_id}/{entry.content_name}")
-    )
+    return bool(download.stored_items(vault.git(paths), entry))

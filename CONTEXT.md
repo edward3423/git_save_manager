@@ -21,8 +21,12 @@ _Avoid_: origin, GitHub repo, server
 ### Entries
 
 **Entry**:
-A unit of managed content - one file or one directory - that is versioned in the Vault and can exist on many Machines. Its identity is its **Entry ID**, never its name and never its path.
+A unit of managed content - one file, one directory, or a **File Set** - that is versioned in the Vault and can exist on many Machines. Its identity is its **Entry ID**, never its name and never its path.
 _Avoid_: item, save, game, profile, target
+
+**File Set**:
+An Entry made of several individual files that may live in unrelated folders - `~/.yabairc` and `~/.skhdrc` - kept together as one unit: one state, one Sync, one Backup, one Restore. Each file is a **member**, identified by its member name (the name it is stored under in the Vault), and each Machine binds each member to its own path. Members are files, never folders. See [ADR-0007](docs/adr/0007-an-entry-may-be-a-set-of-files.md).
+_Avoid_: group, bundle, multi-file entry
 
 **Entry ID**:
 The immutable, generated identifier of an Entry. It is the only name the Vault uses on disk, so an Entry's location never changes and its display name can be edited freely.
@@ -39,6 +43,10 @@ _Avoid_: mapping, link, path config
 **Unlinked**:
 The state of an Entry that exists in the Vault but has no Binding on this Machine. Unlinked Entries are visible but cannot be synced until a Binding is created, which the user must confirm explicitly.
 _Avoid_: unbound, orphaned, inactive
+
+**Needs Binding**:
+The state of a File Set bound on this Machine that has a member with no path here - typically a file another Machine added. Like Unlinked, it has no Entry State and cannot be synced until the missing member is bound: moving the other files alone would treat the set as smaller than it is.
+_Avoid_: partially bound, incomplete
 
 ### Machines
 

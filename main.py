@@ -22,6 +22,11 @@ def main() -> int:
     qt = QApplication(sys.argv)
     qt.setStyleSheet((Path(__file__).parent / "ui" / "style.qss").read_text(encoding="utf-8"))
 
+    from ui.shortcuts import WindowShortcuts
+
+    shortcuts = WindowShortcuts(qt)  # Cmd+W / Cmd+Q, in every window and dialog
+    qt.installEventFilter(shortcuts)
+
     try:
         app = startup.start(Paths.default())
     except (AlreadyRunning, WorkspaceNotWritable) as refusal:
