@@ -37,6 +37,13 @@ QPushButton:disabled {
     border-color: #2f3136;
 }
 
+/* Qt's own drop-down arrow shrinks to a speck under this stylesheet; a button with a menu
+   carries its arrow in its text instead. */
+QPushButton::menu-indicator {
+    image: none;
+    width: 0;
+}
+
 QListWidget {
     background: #26282c;
     border: 1px solid #3a3d42;

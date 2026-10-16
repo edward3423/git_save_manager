@@ -614,6 +614,7 @@ class AddEntryDialog(QDialog):
     def __init__(self, app: App, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.app = app
+        self.created_id: str | None = None
         self.setWindowTitle("Add Entry")
 
         self.name_edit = QLineEdit()
@@ -735,7 +736,7 @@ class AddEntryDialog(QDialog):
             return
         try:
             if len(chosen) == 1:
-                operations.add_entry(
+                entry = operations.add_entry(
                     self.app.paths,
                     self.app.config,
                     self.app.description,
@@ -744,7 +745,7 @@ class AddEntryDialog(QDialog):
                     chosen[0],
                 )
             else:
-                operations.add_file_set(
+                entry = operations.add_file_set(
                     self.app.paths,
                     self.app.config,
                     self.app.description,
@@ -766,6 +767,7 @@ class AddEntryDialog(QDialog):
             f"{name} was created, but no save data has been copied into the Vault yet. "
             "Adding an Entry only records where the save lives; Sync is what captures it.",
         )
+        self.created_id = entry.entry_id
         self.accept()
 
 

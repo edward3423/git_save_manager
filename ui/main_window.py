@@ -127,7 +127,7 @@ class MainWindow(QMainWindow):
         self.filter_actions: dict[EntryState, QAction] = {}
         self.bulk_buttons: dict[EntryState, QPushButton] = {}
 
-        self.filter_button = QPushButton("Filter")
+        self.filter_button = QPushButton("Filter  \u25be")
         menu = QMenu(self.filter_button)
         for state in presenter.BULK_ACTIONS:
             action = QAction(presenter.STATE_CAPTIONS[state], menu)
@@ -493,8 +493,33 @@ class MainWindow(QMainWindow):
         return row
 
     def add_entry(self) -> None:
-        if dialogs.AddEntryDialog(self.app, self).exec():
+        dialog = dialogs.AddEntryDialog(self.app, self)
+        if dialog.exec():
             self._settled()
+            if dialog.created_id is not None:
+                self.focus_entry(dialog.created_id)
+
+    def focus_entry(self, entry_id: str) -> None:
+        """Select an Entry in the sidebar, scrolled into view and holding keyboard focus.
+
+        A filter that would hide it is cleared first: the user just asked to see this Entry,
+        and a selection the sidebar cannot show would leave the detail pane describing a row
+        that is not there.
+        """
+        if not any(row.entry_id == entry_id for row in self.shown):
+            for action in self.filter_actions.values():
+                action.blockSignals(True)
+                action.setChecked(False)
+                action.blockSignals(False)
+            self.filter_states.clear()
+            self.refresh()
+        for index in range(self.sidebar.count()):
+            item = self.sidebar.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == entry_id:
+                self.sidebar.setCurrentItem(item)  # currentItemChanged redraws the detail pane
+                self.sidebar.scrollToItem(item)
+                self.sidebar.setFocus()
+                return
 
     def set_up(self) -> None:
         if dialogs.SetupDialog(self.app, self.store, self).exec():
