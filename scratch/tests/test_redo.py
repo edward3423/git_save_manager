@@ -11,6 +11,7 @@ import pytest
 
 from core import ledger, redo, startup, vault
 from core.config import Config, MachineDescription
+from core.credentials import Credential
 from core.ledger import Ledger
 from core.paths import Paths
 
@@ -19,16 +20,16 @@ MACHINE = "9c8b7a65-0000-4000-8000-00000000000a"
 
 class FakeStore:
     def __init__(self) -> None:
-        self.token: str | None = "ghp_stored"
+        self.token: Credential | None = Credential(access_token="ghp_stored")
         self.deleted = False
 
-    def get_pat(self) -> str | None:
+    def load(self) -> Credential | None:
         return self.token
 
-    def set_pat(self, token: str) -> None:
-        self.token = token
+    def save(self, credential: Credential) -> None:
+        self.token = credential
 
-    def delete_pat(self) -> None:
+    def delete(self) -> None:
         self.token = None
         self.deleted = True
 

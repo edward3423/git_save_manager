@@ -46,7 +46,7 @@ from PyQt6.QtWidgets import (
 from core import backups, cloud, device_flow, entries, github, ledger, operations, redo, vault
 from core.backups import Backup
 from core.cloud import Side
-from core.credentials import CredentialStore
+from core.credentials import Credential, CredentialStore
 from core.entry_state import EntryState
 from core.git import GitError, GitTimeout
 from core.logger import log
@@ -122,7 +122,7 @@ class GitHubSignIn(QWidget):
     """`token()` may have changed: signed in, signed out, or switched to the pasted token."""
 
     _code_ready = pyqtSignal(object, object)  # run, device_flow.DeviceCode
-    _signed_in = pyqtSignal(object, str, str)  # run, token, login
+    _signed_in = pyqtSignal(object, object, str)  # run, Credential, login
     _failed = pyqtSignal(object, str)  # run, message
 
     def __init__(
@@ -135,7 +135,7 @@ class GitHubSignIn(QWidget):
         self.transport = transport or device_flow.FormTransport()
         self.api = api or github.RestApi()
         self._run: threading.Event | None = None
-        self._token: str | None = None
+        self._credential: Credential | None = None
         self._login: str | None = None
 
         self.sign_in_button = QPushButton("Sign in with GitHub")
@@ -201,10 +201,17 @@ class GitHubSignIn(QWidget):
 
     # --- what the caller reads -------------------------------------------------------------
 
-    def token(self) -> str | None:
+    def credential(self) -> Credential | None:
+        """The whole sign-in, as it should be stored: a device-flow sign-in keeps the refresh
+        token that renews it; a pasted PAT is just the token, valid until revoked."""
         if self.use_pat.isChecked():
-            return self.pat_edit.text().strip() or None
-        return self._token
+            pasted = self.pat_edit.text().strip()
+            return Credential(access_token=pasted) if pasted else None
+        return self._credential
+
+    def token(self) -> str | None:
+        found = self.credential()
+        return None if found is None else found.access_token
 
     def login(self) -> str | None:
         """Who the signed-in token belongs to; None for a pasted token (validated later)."""
@@ -214,7 +221,7 @@ class GitHubSignIn(QWidget):
 
     def start(self) -> None:
         self.cancel()
-        self._token = self._login = None
+        self._credential = self._login = None
         run = threading.Event()
         self._run = run
         self.sign_in_button.setEnabled(False)
@@ -233,10 +240,11 @@ class GitHubSignIn(QWidget):
         try:
             code = device_flow.start(self.transport)
             self._emit(run, self._code_ready, code)
-            token = device_flow.wait_for_token(self.transport, code, run.wait)
-            if token is None:
+            found = device_flow.wait_for_token(self.transport, code, run.wait)
+            if found is None:
                 return  # cancelled
-            self._emit(run, self._signed_in, token, github.viewer(self.api, token))
+            login = github.viewer(self.api, found.access_token)
+            self._emit(run, self._signed_in, found, login)
         except (device_flow.SignInFailed, github.GitHubUnreachable, github.BadToken) as error:
             self._emit(run, self._failed, str(error))
 
@@ -265,11 +273,11 @@ class GitHubSignIn(QWidget):
         self.status.setText("Waiting for you to approve on GitHub...")
         self.code_panel.show()
 
-    def _done(self, run: threading.Event, token: str, login: str) -> None:
+    def _done(self, run: threading.Event, credential: Credential, login: str) -> None:
         if run is not self._run:
             return
         self._run = None
-        self._token, self._login = token, login
+        self._credential, self._login = credential, login
         self.code_panel.hide()
         self.sign_in_button.setText("Sign in again")
         self.sign_in_button.setEnabled(True)
@@ -364,10 +372,11 @@ class SetupDialog(QDialog):
 
     def run_bootstrap(self) -> None:
         repo = self.repo_edit.text().strip()
-        token = self.sign_in.token()
-        if "/" not in repo or not token:
+        credential = self.sign_in.credential()
+        if "/" not in repo or credential is None:
             QMessageBox.warning(self, "Set up", "Both owner/repository and a sign-in are needed.")
             return
+        token = credential.access_token
 
         try:
             done = github.bootstrap(
@@ -391,7 +400,7 @@ class SetupDialog(QDialog):
             _fail(self, "Set up", error)
             return
 
-        self.store.set_pat(token)
+        self.store.save(credential)
         if done.adopted is not None:
             operations.adopt_bindings(
                 self.app.paths,
@@ -469,12 +478,12 @@ class SignInDialog(QDialog):
         super().done(result)
 
     def run_save(self) -> None:
-        token = self.sign_in.token()
-        if token is None:
+        credential = self.sign_in.credential()
+        if credential is None:
             return
         # The one probe that proves this token can reach this repository - and, succeeding,
         # it is also the explicit Check Connection that leaves Offline Mode.
-        if not self.app.cloud.check_connection(token):
+        if not self.app.cloud.check_connection(credential.access_token):
             who = self.sign_in.login()
             QMessageBox.warning(
                 self,
@@ -484,7 +493,7 @@ class SignInDialog(QDialog):
                 "\n\nSign in with the account that owns the repository (or has access to it).",
             )
             return
-        self.store.set_pat(token)
+        self.store.save(credential)
         log().info(
             "Signed in to GitHub%s.", f" as {self.sign_in.login()}" if self.sign_in.login() else ""
         )

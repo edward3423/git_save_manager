@@ -10,6 +10,15 @@ sensitive ships with the application. The token that comes back is an ordinary O
 with the `repo` scope - Git and the REST API take it exactly where they took a classic PAT,
 and it is stored in the same keyring slot (`core.credentials`).
 
+## Expiring tokens
+
+When the OAuth App has token expiration turned on, GitHub answers the sign-in with an access
+token that lives eight hours *and* a refresh token, with both lifetimes. The answer becomes a
+`Credential` that keeps all of it, and `refresh` trades the refresh token for a fresh pair -
+without a client secret, which GitHub waives for tokens that came from the device flow. Each
+refresh token is single-use: once spent, it and the old access token both stop working, so
+the new pair must be stored before anything else happens (`core.session`).
+
 Like every other GitHub call, the transport is a narrow protocol faked in tests; the waiting
 between polls is injected too, so a test never sleeps and the UI can cancel instantly.
 """
@@ -17,6 +26,7 @@ between polls is injected too, so a test never sleeps and the UI can cancel inst
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,6 +34,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from core.credentials import Credential
 from core.github import GitHubUnreachable
 
 CLIENT_ID = "Ov23li2BxcADatIHg22w"
@@ -32,6 +43,7 @@ SCOPE = "repo"  # private repositories: create the Cloud Vault, push, pull
 DEVICE_CODE_URL = "https://github.com/login/device/code"
 TOKEN_URL = "https://github.com/login/oauth/access_token"
 GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
+REFRESH_GRANT_TYPE = "refresh_token"
 TIMEOUT = 30.0
 
 SLOW_DOWN_PENALTY = 5
@@ -92,6 +104,14 @@ class SignInFailed(Exception):
     """The sign-in ended without a token: denied, expired, or refused by GitHub."""
 
 
+class RefreshRejected(Exception):
+    """GitHub would not renew the sign-in: the refresh token is spent, expired, or revoked.
+
+    Only a new sign-in recovers from this - unless another copy of the app on this Machine
+    spent the refresh token first, and the keyring already holds the pair it got back.
+    """
+
+
 _EXPLAINED = {
     "access_denied": "The sign-in was declined on GitHub. Nothing was changed.",
     "expired_token": "The code expired before it was approved. Start the sign-in again.",
@@ -127,13 +147,31 @@ def start(transport: Transport, client_id: str = CLIENT_ID) -> DeviceCode:
     )
 
 
+def _granted(answer: dict[str, Any], now: float) -> Credential:
+    """A token answer as a Credential. The lifetimes are relative ("expires in 28800 seconds"),
+    so they are pinned to this Machine's clock at the moment they arrived - which makes the
+    expiry immune to any skew between this clock and GitHub's."""
+
+    def deadline(field: str) -> float | None:
+        seconds = answer.get(field)
+        return now + float(seconds) if isinstance(seconds, int | float) else None
+
+    return Credential(
+        access_token=str(answer["access_token"]),
+        refresh_token=str(answer["refresh_token"]) if answer.get("refresh_token") else None,
+        expires_at=deadline("expires_in"),
+        refresh_expires_at=deadline("refresh_token_expires_in"),
+    )
+
+
 def wait_for_token(
     transport: Transport,
     code: DeviceCode,
     wait: Callable[[float], bool],
     client_id: str = CLIENT_ID,
-) -> str | None:
-    """Poll until the user approves, and return the token - or None if `wait` reports a cancel.
+    now: Callable[[], float] = time.time,
+) -> Credential | None:
+    """Poll until the user approves, and return the sign-in - or None if `wait` reports a cancel.
 
     `wait(seconds)` blocks for the polling interval and answers True when the caller has
     cancelled (in the app, `threading.Event.wait`). GitHub's own `expired_token` ends a code
@@ -145,9 +183,8 @@ def wait_for_token(
         if wait(interval):
             return None
         answer = transport.post(TOKEN_URL, fields)
-        token = answer.get("access_token")
-        if token:
-            return str(token)
+        if answer.get("access_token"):
+            return _granted(answer, now())
         error = answer.get("error")
         if error == "authorization_pending":
             continue
@@ -156,3 +193,29 @@ def wait_for_token(
             interval = int(answer.get("interval", interval + SLOW_DOWN_PENALTY))
             continue
         raise _failure(answer)
+
+
+def refresh(
+    transport: Transport,
+    credential: Credential,
+    client_id: str = CLIENT_ID,
+    now: Callable[[], float] = time.time,
+) -> Credential:
+    """Trade the refresh token for a new access token and refresh token.
+
+    Raises RefreshRejected when GitHub says no, and GitHubUnreachable when it cannot be asked.
+    """
+    if credential.refresh_token is None:
+        raise RefreshRejected("This sign-in cannot be renewed: it came with no refresh token.")
+    answer = transport.post(
+        TOKEN_URL,
+        {
+            "client_id": client_id,
+            "grant_type": REFRESH_GRANT_TYPE,
+            "refresh_token": credential.refresh_token,
+        },
+    )
+    if answer.get("access_token"):
+        return _granted(answer, now())
+    detail = answer.get("error_description") or answer.get("error", "unknown")
+    raise RefreshRejected(f"GitHub would not renew the sign-in: {detail}")

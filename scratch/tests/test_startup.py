@@ -121,13 +121,13 @@ def test_reset_brings_the_app_back_to_first_run_without_a_restart(paths):
     from core import redo
 
     class NoStore:
-        def get_pat(self):
+        def load(self):
             return None
 
-        def set_pat(self, token):
+        def save(self, credential):
             pass
 
-        def delete_pat(self):
+        def delete(self):
             pass
 
     app = startup.start(paths)

@@ -9,7 +9,8 @@ import urllib.error
 import pytest
 
 from core import device_flow
-from core.device_flow import DeviceCode, SignInFailed
+from core.credentials import Credential
+from core.device_flow import DeviceCode, RefreshRejected, SignInFailed
 from core.github import GitHubUnreachable
 
 CODE = DeviceCode(
@@ -77,7 +78,7 @@ def test_polling_waits_out_pending_answers_and_returns_the_token():
     )
     waits = Waits()
 
-    assert device_flow.wait_for_token(hub, CODE, waits) == "gho_abc"
+    assert device_flow.wait_for_token(hub, CODE, waits) == Credential(access_token="gho_abc")
     assert waits.seen == [5, 5, 5]  # waits *before* every poll, never polling early
     url, fields = hub.posts[0]
     assert url == device_flow.TOKEN_URL
@@ -141,3 +142,73 @@ def test_the_real_transport_turns_an_unreachable_github_into_the_setup_error(mon
 
     with pytest.raises(GitHubUnreachable):
         device_flow.FormTransport().post(device_flow.TOKEN_URL, {"client_id": "x"})
+
+
+# --- expiring tokens: what an OAuth App with token expiration turned on hands back ---------
+
+EXPIRING_ANSWER = {
+    "access_token": "gho_short",
+    "expires_in": 28800,  # eight hours
+    "refresh_token": "ghr_long",
+    "refresh_token_expires_in": 15897600,  # six months
+    "token_type": "bearer",
+    "scope": "repo",
+}
+
+
+def test_an_expiring_sign_in_keeps_the_refresh_token_and_pins_both_lifetimes_to_now():
+    hub = ScriptedGitHub(EXPIRING_ANSWER)
+
+    found = device_flow.wait_for_token(hub, CODE, Waits(), now=lambda: 1000.0)
+
+    assert found == Credential(
+        access_token="gho_short",
+        refresh_token="ghr_long",
+        expires_at=1000.0 + 28800,
+        refresh_expires_at=1000.0 + 15897600,
+    )
+
+
+def test_refreshing_spends_the_refresh_token_for_a_new_pair_without_a_client_secret():
+    hub = ScriptedGitHub({**EXPIRING_ANSWER, "access_token": "gho_new", "refresh_token": "ghr_new"})
+    old = Credential(access_token="gho_old", refresh_token="ghr_old", expires_at=5.0)
+
+    renewed = device_flow.refresh(hub, old, now=lambda: 2000.0)
+
+    assert renewed == Credential(
+        access_token="gho_new",
+        refresh_token="ghr_new",
+        expires_at=2000.0 + 28800,
+        refresh_expires_at=2000.0 + 15897600,
+    )
+    assert hub.posts == [
+        (
+            device_flow.TOKEN_URL,
+            {
+                "client_id": device_flow.CLIENT_ID,
+                "grant_type": "refresh_token",
+                "refresh_token": "ghr_old",
+            },
+        )
+    ]
+
+
+def test_a_refused_refresh_says_what_github_said():
+    hub = ScriptedGitHub(
+        {
+            "error": "bad_refresh_token",
+            "error_description": "The refresh token passed is incorrect or expired.",
+        }
+    )
+    old = Credential(access_token="gho_old", refresh_token="ghr_spent", expires_at=5.0)
+
+    with pytest.raises(RefreshRejected, match="incorrect or expired"):
+        device_flow.refresh(hub, old)
+
+
+def test_a_sign_in_without_a_refresh_token_is_never_sent_to_github_to_renew():
+    hub = ScriptedGitHub()
+
+    with pytest.raises(RefreshRejected):
+        device_flow.refresh(hub, Credential(access_token="ghp_pasted"))
+    assert hub.posts == []

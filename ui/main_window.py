@@ -50,6 +50,7 @@ from core.cloud import CloudOffline, ForeignConflict, PushRejected
 from core.credentials import CredentialStore, KeyringCredentialStore
 from core.entry_state import Action, EntryState
 from core.logger import FanoutHandler, log
+from core.session import GitHubSession
 from core.startup import App
 from ui import dialogs, presenter
 
@@ -73,6 +74,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.app = app
         self.store = store or KeyringCredentialStore()
+        self.session = GitHubSession(self.store)
 
         self.setWindowTitle("Git Save Manager")
         self.resize(980, 640)
@@ -451,11 +453,13 @@ class MainWindow(QMainWindow):
         """
         if not self.app.config.is_set_up:
             return
-        pat = self.store.get_pat()
-        if pat is None:
-            return
 
         def work() -> None:
+            # Read on the worker too: opening the app hours later is exactly when the token
+            # is due for renewal, and that network call must not hold up the first paint.
+            pat = self.session.token()
+            if pat is None:
+                return
             with contextlib.suppress(CloudOffline):  # the caption shows it; nothing else to do
                 self.app.cloud.fetch_status(pat)
             self.fetched.emit()
@@ -476,7 +480,7 @@ class MainWindow(QMainWindow):
     # --- operations: one at a time, each re-validated at the moment it runs ----------------
 
     def _pat(self) -> str | None:
-        found = self.store.get_pat()
+        found = self.session.token()
         if found is None:
             log().warning("This Machine is not signed in to GitHub. Use Sign In first.")
         return found
@@ -695,7 +699,7 @@ class MainWindow(QMainWindow):
         # Widening the sparse cone may lazily fetch this Entry's blobs from the Cloud.
         kind = dialogs.BindFilesDialog if row.is_file_set else dialogs.BindDialog
         dialog = kind(
-            self.app, row.entry_id, row.name, self, pat=self.store.get_pat(), prefill=prefill
+            self.app, row.entry_id, row.name, self, pat=self.session.token(), prefill=prefill
         )
         if dialog.exec():
             self._settled()
@@ -748,7 +752,7 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             landed = download.download(
-                self.app.paths, row.entry_id, destination, pat=self.store.get_pat()
+                self.app.paths, row.entry_id, destination, pat=self.session.token()
             )
         except (
             download.NothingToDownload,

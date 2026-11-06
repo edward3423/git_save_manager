@@ -76,7 +76,7 @@ def execute(paths: Paths, store: CredentialStore, discard_unpushed: bool = False
         )
 
     doomed = plan(paths)
-    store.delete_pat()
+    store.delete()
 
     for found in doomed.deletions:
         if found.is_dir():
