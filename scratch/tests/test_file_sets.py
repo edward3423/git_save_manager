@@ -49,7 +49,9 @@ class Machine:
     def write(self, relative: str, text: str) -> Path:
         path = self.home / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        # newline="" writes exactly these bytes: in text mode Windows would turn "\n" into
+        # "\r\n", and every size and content assertion would hold on one platform only.
+        path.write_text(text, encoding="utf-8", newline="")
         return path
 
     def add(self, name: str, files: list[Path]):
@@ -190,10 +192,23 @@ def test_two_files_with_one_name_are_refused(laptop):
         laptop.add("cfg", [laptop.write("a/config", "1"), laptop.write("b/Config", "2")])
 
 
-def test_the_same_file_twice_is_refused(laptop):
+@pytest.mark.parametrize(
+    "kind",
+    [
+        pytest.param(
+            "symlink",
+            marks=pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows"),
+        ),
+        "hardlink",  # the same file under two names, and creatable anywhere
+    ],
+)
+def test_the_same_file_twice_is_refused(laptop, kind):
     real = laptop.write("dotfiles/yabairc", "x")
     link = laptop.home / ".yabairc"
-    link.symlink_to(real)
+    if kind == "symlink":
+        link.symlink_to(real)
+    else:
+        link.hardlink_to(real)
     with pytest.raises(operations.InvalidFileSet, match="same file"):
         laptop.add("yabai", [real, link])
 

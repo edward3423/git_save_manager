@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import os
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -202,6 +203,22 @@ def add_entry(
     return entry
 
 
+def _file_identity(target: Path) -> object:
+    """Which file a path reaches. Paths are not enough: a hard link, another spelling of the
+    name on a case-insensitive disk, or a path through a linked folder all reach one file
+    under a different path - and one file bound as two members would be split in two by the
+    first Restore, which replaces each member's file on its own.
+
+    A file not written yet has no identity but its path. Neither does one on a filesystem
+    that reports no file numbers (FAT reports 0 for every file).
+    """
+    with contextlib.suppress(OSError):
+        found = target.stat()
+        if found.st_ino:
+            return (found.st_dev, found.st_ino)
+    return os.path.normcase(os.path.abspath(target))
+
+
 def _check_file_set(
     files: list[tuple[str, Path]], max_file_bytes: int = MAX_SINGLE_FILE_BYTES
 ) -> None:
@@ -214,7 +231,7 @@ def _check_file_set(
         raise InvalidFileSet("A File Set needs at least one file.")
 
     seen_names: list[str] = []
-    seen_targets: dict[Path, Path] = {}
+    seen_targets: dict[object, Path] = {}
     for name, live in files:
         if any(entries.same_name(other, name) for other in seen_names):
             raise InvalidFileSet(
@@ -229,9 +246,10 @@ def _check_file_set(
                 f"{live} is a folder. An Entry of several files holds individual files only; "
                 "add the folder as an Entry of its own."
             )
-        if target in seen_targets:
-            raise InvalidFileSet(f"{live} is the same file as {seen_targets[target]}.")
-        seen_targets[target] = live
+        identity = _file_identity(target)
+        if identity in seen_targets:
+            raise InvalidFileSet(f"{live} is the same file as {seen_targets[identity]}.")
+        seen_targets[identity] = live
 
         oversized = vault.oversized_files(target, limit=max_file_bytes)
         if oversized:
