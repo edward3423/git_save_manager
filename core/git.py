@@ -95,6 +95,10 @@ class Git:
 
     work_tree: Path
     timeout: float = field(default=DEFAULT_TIMEOUT)
+    isolated: bool = True
+    """Shield the repository from the user's global config (`SAFE_CONFIG`). Always so for the
+    Vault. False only for a repository that is the user's own - the application's checkout,
+    which `gsm update` moves - where their config is exactly what should apply."""
 
     def run(
         self,
@@ -111,7 +115,7 @@ class Git:
         """
         argv = [_git_executable(), "-C", str(self.work_tree)]
 
-        for setting in SAFE_CONFIG + config:
+        for setting in (SAFE_CONFIG if self.isolated else ()) + config:
             argv += ["-c", setting]
 
         if pat is not None:

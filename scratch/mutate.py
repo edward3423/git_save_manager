@@ -123,8 +123,10 @@ MUTATIONS = [
     Mutation(
         "Write into the Live Save directly instead of staging and swapping - a torn save",
         "core/transaction.py",
-        "    source.materialize(staged)",
-        "    _remove(target)\n    source.materialize(target)\n    source.materialize(staged)",
+        "        source.materialize(part.member, staged)",
+        "        _remove(part.target_path)\n"
+        "        source.materialize(part.member, part.target_path)\n"
+        "        source.materialize(part.member, staged)",
     ),
     Mutation(
         "Take the backup *after* the write, when the save it was meant to rescue is gone",
@@ -154,14 +156,14 @@ MUTATIONS = [
     Mutation(
         "Roll forward onto a half-written staged copy after a crash mid-staging",
         "core/transaction.py",
-        "    if journal.stage == Stage.BACKED_UP:",
-        "    if False:",
+        "    if journal.stage == Stage.BACKED_UP or not any(",
+        "    if not any(",
     ),
     Mutation(
         "Abandon the Live Save when a crash lands between the two renames",
         "core/transaction.py",
-        "    elif staged.exists() or staged.is_symlink():\n        # Caught inside the swap",
-        "    elif False:\n        # Caught inside the swap",
+        "    if _present(staged):\n        # The staged copy is complete",
+        "    if False:\n        # The staged copy is complete",
     ),
     Mutation(
         "Never prune, so the retention setting silently does nothing",
@@ -185,8 +187,11 @@ MUTATIONS = [
     Mutation(
         "Create the missing parent folder instead of refusing - writing under a mount point",
         "core/transaction.py",
-        "    if not target.parent.is_dir():",
-        "    if False:",
+        "    if not parent.parent.is_dir():\n        raise LiveParentMissing(",
+        "    if not parent.parent.is_dir():\n"
+        "        parent.mkdir(parents=True)\n"
+        "        return\n"
+        "        raise LiveParentMissing(",
     ),
     Mutation(
         "Follow symlinks when archiving, baking a link's target into the backup",
@@ -316,11 +321,12 @@ MUTATIONS = [
     Mutation(
         "Move the Baseline when a Backup is restored, claiming a Sync that never happened",
         "core/operations.py",
-        "    binding = the_ledger.require(entry_id)\n\n    return transaction.write_live(",
-        "    binding = the_ledger.require(entry_id)\n"
-        "    the_ledger.record_sync(\n"
-        "        entry_id, BackupSource(backup).digest(), SyncDirection.TO_LIVE\n"
-        "    )\n"
+        "    live = _live(the_ledger, entries.require(paths, entry_id))\n"
+        "\n"
+        "    return transaction.write_live(",
+        "    live = _live(the_ledger, entries.require(paths, entry_id))\n"
+        "    the_ledger.record_sync(entry_id, BackupSource(backup).digest(), "
+        "SyncDirection.TO_LIVE)\n"
         "    return transaction.write_live(",
     ),
     Mutation(
@@ -349,17 +355,19 @@ MUTATIONS = [
         "Advance the Baseline on Pull, from the Pull side - stale Live Saves then read In Sync "
         "or Local Ahead, and the next Sync uploads old progress over another Machine's new",
         "core/cloud.py",
-        "            return Pulled(commits=behind, conflicts=_entries_of(unmerged))\n\n"
-        "        return Pulled(commits=behind)",
-        "            return Pulled(commits=behind, conflicts=_entries_of(unmerged))\n\n"
-        "        from core import hashing, ledger\n\n"
+        "        self._record_status()\n        return Pulled(commits=behind)\n",
+        "        from core import entries, hashing, ledger\n"
+        "\n"
         "        the_ledger = ledger.load(self.paths)\n"
         "        for binding in the_ledger.bindings.values():\n"
-        "            binding.baseline = hashing.content_hash(\n"
-        "                self.paths.entry_content_dir(binding.entry_id)\n"
-        "            )\n"
+        "            entry = entries.read(self.paths, binding.entry_id)\n"
+        "            if entry is not None:\n"
+        "                binding.baseline = hashing.content_hash(\n"
+        "                    entries.content_path(self.paths, entry)\n"
+        "                )\n"
         "        ledger.save(self.paths, the_ledger)\n"
-        "        return Pulled(commits=behind)",
+        "        self._record_status()\n"
+        "        return Pulled(commits=behind)\n",
     ),
     Mutation(
         "Pull with a rebase, rewriting this Machine's published history",
@@ -483,7 +491,7 @@ MUTATIONS = [
     Mutation(
         "Publish an empty Binding list, blinding every other Machine's Bind hints",
         "core/operations.py",
-        "    published = {entry_id: binding.live_path for entry_id, binding in "
+        "    published = {entry_id: binding.published for entry_id, binding in "
         "the_ledger.bindings.items()}",
         "    published = {}",
     ),
@@ -524,14 +532,14 @@ MUTATIONS = [
     Mutation(
         "Let a second instance run, so two processes write one Ledger and one Vault",
         "core/lock.py",
-        "    holder = _holder(path)\n    if holder is not None and _alive(holder):",
-        "    holder = _holder(path)\n    if False:",
+        "    if not _try_lock(fd):",
+        "    if False:",
     ),
     Mutation(
-        "Treat a dead process as alive, wedging the app behind a crashed run's lock forever",
+        "Never let go on shutdown, so every later launch is refused as a duplicate",
         "core/lock.py",
-        "    except OSError:\n        return False",
-        "    except OSError:\n        return True",
+        "        fd, self.fd = self.fd, None",
+        "        return",
     ),
     Mutation(
         "Skip crash recovery at startup, leaving a torn Live Save exactly as the crash left it",
@@ -556,6 +564,68 @@ MUTATIONS = [
         "ui/presenter.py",
         "        if last is not None:",
         "        if False:",
+    ),
+    # --- the command line: nothing on silence, nothing on a stale approval ----------------------
+    Mutation(
+        "Let a destructive command proceed when no one confirmed it (a script, an agent)",
+        "cli/support.py",
+        '    raise CliError(\n        "Nothing has been done: this needs confirmation.',
+        '    return\n    raise CliError(\n        "Nothing has been done: this needs confirmation.',
+    ),
+    Mutation(
+        "Accept any --approve token, so a Vault that moved after the preview is written anyway",
+        "cli/support.py",
+        "        if approval is None or approve != approval:",
+        "        if approval is None:",
+    ),
+    Mutation(
+        "Treat a 'no' at the terminal prompt as a 'yes'",
+        "cli/support.py",
+        '        if answer in ("y", "yes"):',
+        "        if True:",
+    ),
+    Mutation(
+        "Skip the command line's state re-check, so sync runs on a Conflict",
+        "cli/commands.py",
+        "    if row.status is None or action not in row.status.offered:",
+        "    if row.status is None:",
+    ),
+    Mutation(
+        "Leave a contested Pull's merge open when no side was chosen",
+        "cli/commands.py",
+        "                cloud.abort_merge(ctx.paths)",
+        "                pass",
+    ),
+    Mutation(
+        "Send core's warnings to stdout, corrupting --json output",
+        "cli/main.py",
+        "    _configure_logging(stderr, args.verbose)",
+        "    _configure_logging(stdout, args.verbose)",
+    ),
+    # --- gsm update: never at the cost of anything local ---------------------------------------
+    Mutation(
+        "Update over local commits instead of refusing",
+        "core/updater.py",
+        "        if standing.ahead:",
+        "        if False:",
+    ),
+    Mutation(
+        "Update over local edits instead of refusing",
+        "core/updater.py",
+        "        if changed:",
+        "        if False:",
+    ),
+    Mutation(
+        "Skip the dependency sync when the code is already current",
+        "core/updater.py",
+        "    _sync_dependencies(root, uv, moved=now != standing.current)",
+        "    if now != standing.current:\n        _sync_dependencies(root, uv, moved=True)",
+    ),
+    Mutation(
+        "Update without the lock, replacing code under a running window",
+        "cli/main.py",
+        "        held = lock.acquire(ctx.paths)",
+        "        held = lock.Lock(path=ctx.paths.lock_file, fd=None)",
     ),
 ]
 

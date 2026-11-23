@@ -1,7 +1,11 @@
-"""Entry point: bring the core up, refuse early if we must, then open the window.
+"""Entry point: `gsm` opens the window; `gsm <command>` runs one command and exits.
 
-The two refusals happen *before* the window exists - a read-only install and a second
-instance both get a message box and a clean exit, not a half-started application.
+For the window: bring the core up, refuse early if we must, then open it. The two refusals
+happen *before* the window exists - a read-only install and a second instance both get a
+message box and a clean exit, not a half-started application.
+
+A command never imports Qt at all (see `cli`), so it starts quickly and runs where no display
+exists. `gsm gui` opens the window explicitly, passing any further arguments on to Qt.
 """
 
 from __future__ import annotations
@@ -9,17 +13,26 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
-
-from core import startup
-from core.lock import AlreadyRunning
-from core.logger import configure_logging
-from core.paths import Paths, WorkspaceNotWritable
-
 
 def main() -> int:
+    arguments = sys.argv[1:]
+    if arguments and arguments[0] != "gui":
+        from cli.main import main as run_command
+
+        return run_command(arguments)
+    return open_window([sys.argv[0], *arguments[1:]])
+
+
+def open_window(argv: list[str]) -> int:
+    from PyQt6.QtWidgets import QApplication, QMessageBox
+
+    from core import startup
+    from core.lock import AlreadyRunning
+    from core.logger import configure_logging
+    from core.paths import Paths, WorkspaceNotWritable
+
     fanout = configure_logging()
-    qt = QApplication(sys.argv)
+    qt = QApplication(argv)
     qt.setStyleSheet((Path(__file__).parent / "ui" / "style.qss").read_text(encoding="utf-8"))
 
     from ui.shortcuts import WindowShortcuts

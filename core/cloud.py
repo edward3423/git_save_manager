@@ -207,7 +207,15 @@ def finish_merge(paths: Paths, config: Config, description: MachineDescription) 
         )
 
     repo = git(paths)
-    repo.run("commit", "--no-edit", config=vault.commit_identity(config, description))
+    # `--no-edit` alone keeps the `# Conflicts:` lines Git appends to the prepared message,
+    # and they would sit in the Vault's history for good. `strip` drops them, as an editor
+    # session would have.
+    repo.run(
+        "commit",
+        "--no-edit",
+        "--cleanup=strip",
+        config=vault.commit_identity(config, description),
+    )
     return repo.run("rev-parse", "HEAD").strip()
 
 
@@ -288,20 +296,27 @@ class Cloud:
         """Read where HEAD stands against the tracking ref and cache it. Reads only the refs
         already on disk - no network - so a caller that just moved a ref (a push advancing
         `origin/<branch>`) gets the new truth, not the pre-operation count."""
-        ahead, behind = self._ahead_behind()
-
-        if ahead and behind:
-            state = CloudState.DIVERGED
-        elif ahead:
-            state = CloudState.AHEAD
-        elif behind:
-            state = CloudState.BEHIND
-        else:
-            state = CloudState.UP_TO_DATE
-
+        state, ahead, behind = self.known_state()
         status = CloudStatus(state=state, ahead=ahead, behind=behind, checked_at=datetime.now(UTC))
         self.last_status = status
         return status
+
+    def known_state(self) -> tuple[CloudState, int, int]:
+        """Where HEAD stands against the Cloud Vault *as of the last fetch*: `(state, ahead,
+        behind)`, read from the refs already on disk, without the network.
+
+        Possibly stale, and that is the point - it answers offline, instantly, which is what a
+        status command needs. `fetch_status` is the fresh answer. Nothing is cached in
+        `last_status`, which records only what an exchange with the Cloud observed.
+        """
+        ahead, behind = self._ahead_behind()
+        if ahead and behind:
+            return CloudState.DIVERGED, ahead, behind
+        if ahead:
+            return CloudState.AHEAD, ahead, behind
+        if behind:
+            return CloudState.BEHIND, ahead, behind
+        return CloudState.UP_TO_DATE, ahead, behind
 
     def fetch_status(self, pat: str) -> CloudStatus:
         """Fetch, then say where HEAD stands. Observes only: never pulls, never pushes."""
