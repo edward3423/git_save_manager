@@ -47,6 +47,9 @@ git_save_manager/
 │   ├── dialogs.py
 │   └── style.qss
 │
+├── cli/                        # `gsm <command>`: the same verbs, no Qt (`gsm` alone opens the window)
+│                               # core/updater.py backs `gsm update`
+│
 ├── scratch/tests/              # automated tests (headless: no GUI, no network)
 │
 └── data/                       # ALL runtime state. Gitignored. Never committed.

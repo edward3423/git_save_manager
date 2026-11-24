@@ -44,12 +44,55 @@ line in your shell profile (`.zshrc`, `.bashrc`, or `.profile`, matching `$SHELL
 macOS, the user PATH environment variable on Windows. Either way `gsm` works in a **new**
 terminal. Set `GSM_NO_PATH=1` to be left alone.
 
-To **update**, run the exact same command. It fetches the latest `main` and re-syncs
-dependencies in place; your `data/` directory, including the Vault, is untouched.
+To **update**, run `gsm update` (or `gsm update --check` to only see what is new). It
+fast-forwards the checkout to the latest `main` and re-syncs dependencies in place; your
+`data/` directory, including the Vault, is untouched. It refuses, changing nothing, if the
+checkout has local edits or commits - running the install command again replaces the
+checkout outright and also refreshes the launcher and menu entry.
 
 Overrides: `PREFIX` (`GSM_PREFIX` on Windows) to install somewhere else, `GSM_REF` to track a
 different branch or tag, `GSM_NO_DESKTOP=1` (`GSM_NO_SHORTCUT=1` on Windows) to skip the menu
 entry, `GSM_NO_PATH=1` to skip the PATH change.
+
+## Command line
+
+`gsm` on its own opens the window. `gsm COMMAND` runs one command and exits, without loading
+the GUI toolkit - for a terminal, a script, or an agent. `gsm --help` lists every command, and
+`gsm COMMAND --help` describes one.
+
+```
+gsm status                       # every Entry's state, and the Cloud Vault's
+gsm sync Hades -m "boss slain"   # Live Save -> Vault, one commit
+gsm push                         # Vault -> Cloud Vault
+gsm pull                         # Cloud Vault -> Vault (no Live Save is touched)
+gsm restore Hades                # Vault -> Live Save, previewed and backed up
+gsm sync --all                   # every Entry that is Local Ahead
+gsm restore --all                # every Entry that is Vault Ahead
+```
+
+The rest: `show`, `history`, `backups`, `machines`, `log`, `resolve`, `rollback`, `add`,
+`bind`, `unbind`, `rename`, `remove`, `add-file`, `remove-file`, `download`, `fetch`, `check`,
+`setup`, `sign-in`, `redo`, `update`. An Entry is named by its Display Name (any case), its
+ID, or a unique ID prefix.
+
+The commands keep the window's rules. Each re-checks the Entry's state immediately before
+acting, and refuses what the state does not offer. Every destructive command prints exactly
+what it will do first and then asks; with no terminal to ask at, it stops with exit code 3
+having done nothing, unless given `--yes`. For a write over a Live Save, `--dry-run` also
+prints an approval token, and `--approve TOKEN` proceeds only if nothing has changed since
+that preview - a game that saved in between is never overwritten.
+
+For scripts and agents:
+
+- `--json` makes stdout exactly one JSON object: `{"ok": true, "command": ..., ...}`, or
+  `{"ok": false, "error": {"kind": ..., "message": ...}}`. Progress and warnings go to stderr.
+- Exit codes: 0 done, 1 refused or failed, 2 bad command line, 3 needs confirmation.
+- A Pull that two Machines contest stops and changes nothing until each Entry is given a side:
+  `gsm pull --take Hades=vault` keeps this Machine's line, `=cloud` takes the other's.
+- Sign in without a browser by piping a token: `gsm setup OWNER/REPO --token-stdin`. A token
+  is never accepted as an argument, where it would land in shell history.
+- The window and every command share one lock, so commands are refused while the window is
+  open, and two commands started at once never both run.
 
 ## Design
 

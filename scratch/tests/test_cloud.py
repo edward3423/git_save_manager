@@ -321,6 +321,19 @@ def test_a_contested_entry_surfaces_as_a_merge_conflict_at_entry_granularity(con
     assert pulled.conflicts == (entry.entry_id,)
 
 
+def test_a_finished_merge_keeps_no_conflict_notes_in_its_message(desktop, contested):
+    """Git appends `# Conflicts:` lines to a conflicted merge's prepared message. They are
+    notes for an editor session, and must not end up in the Vault's history for good."""
+    entry, _ = contested
+    cloud.resolve_merge(desktop.paths, entry.entry_id, cloud.Side.VAULT)
+
+    cloud.finish_merge(desktop.paths, desktop.config, desktop.description)
+
+    message = vault.git(desktop.paths).run("log", "-1", "--format=%B").strip()
+    assert message.startswith("pull(main): from desktop")
+    assert "#" not in message and "Conflicts" not in message
+
+
 def test_resolving_toward_the_cloud_takes_their_save_whole_and_keeps_ours_in_history(
     desktop, contested
 ):
